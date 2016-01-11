@@ -26,7 +26,7 @@ function layer:__init(opt)
   if self.pixel_size == 3 then
     self.output_size = self.num_mixtures * (3+3+3+1) + 1
   else
-    self.output_size = self.num_mixures * (1+1+0+1) + 1
+    self.output_size = self.num_mixtures * (1+1+0+1) + 1
   end
   -- create the core lstm network.
   -- note +1 for addition end tokens, true for multiple input to deep layer connections.

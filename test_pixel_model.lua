@@ -95,7 +95,7 @@ local function gradCheckPM()
 
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 3
+  opt.pixel_size = 1
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -178,7 +178,7 @@ local function gradCheckCrit()
   for t = 1, opt.seq_length do
     local gmm = {}
     local gmms_mean = torch.rand(opt.batch_size, opt.num_mixtures, opt.pixel_size)
-    local gmms_var = torch.repeatTensor(torch.eye(opt.pixel_size):view(1,1,3,3), opt.batch_size, opt.num_mixtures, 1, 1)
+    local gmms_var = torch.repeatTensor(torch.eye(opt.pixel_size):view(1,1,opt.pixel_size,opt.pixel_size), opt.batch_size, opt.num_mixtures, 1, 1)
     local gmms_weight = torch.ones(opt.batch_size, opt.num_mixtures)
     local gmms_sum = torch.repeatTensor(torch.sum(gmms_weight, 2), 1, opt.num_mixtures)
     gmms_weight:cdiv(gmms_sum)
