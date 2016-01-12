@@ -95,7 +95,7 @@ local function gradCheckPM()
 
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 1
+  opt.pixel_size = 3
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -103,6 +103,7 @@ local function gradCheckPM()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 10
+  opt.mult_in = true
   local pm = nn.PixelModel(opt)
   pm:type(dtype)
 
@@ -112,32 +113,16 @@ local function gradCheckPM()
 
   -- evaluate the analytic gradient
   local output = pm:forward(seq)
-  local w1 = torch.randn(opt.batch_size, opt.num_mixtures, opt.pixel_size)
-  local w2 = torch.randn(opt.batch_size, opt.num_mixtures, opt.pixel_size, opt.pixel_size)
-  local w3 = torch.randn(opt.batch_size, opt.num_mixtures)
-  local w4 = torch.randn(opt.batch_size)
+  local w = torch.randn(output:size())
   -- generate random weighted sum criterion
-  local loss = 0
-  local gradOutput = {}
-  for t=1,#output do
-    loss = torch.sum(torch.cmul(output[t][1], w1)) + loss
-    loss = torch.sum(torch.cmul(output[t][2], w2)) + loss
-    loss = torch.sum(torch.cmul(output[t][3], w3)) + loss
-    loss = torch.sum(torch.cmul(output[t][4], w4)) + loss
-    table.insert(gradOutput, {torch.add(w1,t),torch.add(w2,t),torch.add(w3,t),torch.add(w4,t)})
-  end
+  local loss = torch.sum(torch.cmul(output, w))
+  local gradOutput = w
   local gradInput = pm:backward(seq, gradOutput)
 
   -- create a loss function wrapper
   local function f(x)
     local output = pm:forward(x)
-    local loss = 0
-    for t=1,#output do
-      loss = torch.sum(torch.cmul(output[t][1], torch.add(w1,t))) + loss
-      loss = torch.sum(torch.cmul(output[t][2], torch.add(w2,t))) + loss
-      loss = torch.sum(torch.cmul(output[t][3], torch.add(w3,t))) + loss
-      loss = torch.sum(torch.cmul(output[t][4], torch.add(w4,t))) + loss
-    end
+    local loss = torch.sum(torch.cmul(output, w))
     return loss
   end
 
@@ -159,7 +144,7 @@ end
 local function gradCheckCrit()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 3
+  opt.pixel_size = 1
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -167,70 +152,43 @@ local function gradCheckCrit()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 2
-  local crit = nn.PixelModelCriterion(opt.num_mixtures)
+  opt.mult_in = true
+  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
   local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   local seq = torch.cat(pixels, borders, 3):type(dtype)
 
-  local gmms = {}
-  for t = 1, opt.seq_length do
-    local gmm = {}
-    local gmms_mean = torch.rand(opt.batch_size, opt.num_mixtures, opt.pixel_size)
-    local gmms_var = torch.repeatTensor(torch.eye(opt.pixel_size):view(1,1,opt.pixel_size,opt.pixel_size), opt.batch_size, opt.num_mixtures, 1, 1)
-    local gmms_weight = torch.ones(opt.batch_size, opt.num_mixtures)
-    local gmms_sum = torch.repeatTensor(torch.sum(gmms_weight, 2), 1, opt.num_mixtures)
-    gmms_weight:cdiv(gmms_sum)
-    local border = torch.zeros(opt.batch_size)
-    table.insert(gmm, gmms_mean)
-    table.insert(gmm, gmms_var)
-    table.insert(gmm, gmms_weight)
-    table.insert(gmm, border)
-    table.insert(gmms, gmm)
-  end
-
-  local gm = gmms[7][1]:clone()
-  local gv = gmms[7][2]:clone()
-  local gw = gmms[7][3]:clone()
-  local gb = gmms[7][4]:clone()
-  tester:assertTensorEq(gm, gmms[7][1], 1e-4)
-  tester:assertTensorEq(gv, gmms[7][2], 1e-4)
-  tester:assertTensorEq(gw, gmms[7][3], 1e-4)
-  tester:assertTensorEq(gb, gmms[7][4], 1e-4)
+  local gmms = torch.rand(opt.seq_length, opt.batch_size, crit.output_size)
+  local gmms_copy = gmms:clone()
+  local seq_copy = seq:clone()
+  tester:assertTensorEq(gmms_copy, gmms, 1e-4)
+  tester:assertTensorEq(seq_copy, seq, 1e-4)
   -- evaluate the analytic gradient
   local loss = crit:forward(gmms, seq)
   local gradInput = crit:backward(gmms, seq)
-  tester:assertTensorEq(gm, gmms[7][1], 1e-4)
-  tester:assertTensorEq(gv, gmms[7][2], 1e-4)
-  tester:assertTensorEq(gw, gmms[7][3], 1e-4)
-  tester:assertTensorEq(gb, gmms[7][4], 1e-4)
+  tester:assertTensorEq(gmms_copy, gmms, 1e-4)
+  tester:assertTensorEq(seq_copy, seq, 1e-4)
 
-  print('----------')
   -- create a loss function wrapper
   local function f(x)
     local loss = crit:forward(x, seq)
     return loss
   end
 
-  local gradInput_num = gradcheck.numeric_gradient_crit(f, gmms, 1, 1e-6)
+  local gradInput_num = gradcheck.numeric_gradient(f, gmms, 1, 1e-6)
 
-  print(gradInput[1][2])
-  print(gradInput_num[1][2])
-  -- local g = gradInput:view(-1)
-  -- local gn = gradInput_num:view(-1)
-  -- for i=1,g:nElement() do
-  --   local r = gradcheck.relative_error(g[i],gn[i])
-  --   print(i, g[i], gn[i], r)
-  -- end
-  for t=1,opt.seq_length do
-    tester:assertTensorEq(gradInput[t][1], gradInput_num[t][1], 1e-4)
-    tester:assertlt(gradcheck.relative_error(gradInput[t][1], gradInput_num[t][1], 1e-8), 5e-4)
-    tester:assertTensorEq(gradInput[t][3], gradInput_num[t][3], 1e-4)
-    tester:assertlt(gradcheck.relative_error(gradInput[t][3], gradInput_num[t][3], 1e-8), 5e-4)
-    tester:assertTensorEq(gradInput[t][4], gradInput_num[t][4], 1e-4)
-    tester:assertlt(gradcheck.relative_error(gradInput[t][4], gradInput_num[t][4], 1e-8), 5e-4)
-  end
+  print(gradInput)
+  print(gradInput_num)
+  --local g = gradInput:view(-1)
+  --local gn = gradInput_num:view(-1)
+  --for i=1,g:nElement() do
+  --  local r = gradcheck.relative_error(g[i],gn[i])
+  --  print(i, g[i], gn[i], r)
+  --end
+  tester:assertTensorEq(gradInput, gradInput_num, 1e-4)
+  tester:assertlt(gradcheck.relative_error(gradInput, gradInput_num, 1e-8), 5e-4)
 end
 
 local function gradCheck()
@@ -244,8 +202,9 @@ local function gradCheck()
   opt.dropout = 0
   opt.seq_length = 7
   opt.batch_size = 2
+  opt.mult_in = true
   local pm = nn.PixelModel(opt)
-  local crit = nn.PixelModelCriterion(opt.num_mixtures)
+  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
   pm:type(dtype)
   crit:type(dtype)
 
@@ -253,19 +212,17 @@ local function gradCheck()
   local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   local seq = torch.cat(pixels, borders, 3):type(dtype)
 
-  local seq_cp = seq:clone()
-  tester:assertTensorEq(seq_cp, seq, 1e-4)
   -- evaluate the analytic gradient
+  local target = seq:clone()
   local output = pm:forward(seq)
-  local loss = crit:forward(output, seq)
-  local gradOutput = crit:backward(output, seq)
+  local loss = crit:forward(output, target)
+  local gradOutput = crit:backward(output, target)
   local gradInput = pm:backward(seq, gradOutput)
-  tester:assertTensorEq(seq_cp, seq, 1e-4)
 
   -- create a loss function wrapper
   local function f(x)
     local output = pm:forward(x)
-    local loss = crit:forward(output, x)
+    local loss = crit:forward(output, target)
     return loss
   end
 
@@ -273,65 +230,58 @@ local function gradCheck()
 
   print(gradInput)
   print(gradInput_num)
-  -- local g = gradInput:view(-1)
-  -- local gn = gradInput_num:view(-1)
-  -- for i=1,g:nElement() do
-  --   local r = gradcheck.relative_error(g[i],gn[i])
-  --   print(i, g[i], gn[i], r)
-  -- end
+  --local g = gradInput:view(-1)
+  --local gn = gradInput_num:view(-1)
+  --for i=1,g:nElement() do
+  --local r = gradcheck.relative_error(g[i],gn[i])
+  --  print(i, g[i], gn[i], r)
+  --end
 
   tester:assertTensorEq(gradInput, gradInput_num, 1e-4)
   tester:assertlt(gradcheck.relative_error(gradInput, gradInput_num, 1e-8), 5e-4)
 end
 
---[[
 local function overfit()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
   opt.pixel_size = 3
-  opt.output_size = 10
-  opt.rnn_size = 24
-  opt.num_layers = 1
+  opt.num_mixtures = 2
+  opt.recurrent_stride = 3
+  opt.rnn_size = 8
+  opt.num_layers = 2
   opt.dropout = 0
   opt.seq_length = 7
-  opt.batch_size = 6
+  opt.batch_size = 2
+  opt.mult_in = true
   local pm = nn.PixelModel(opt)
-  local crit = nn.PixelModelCriterion()
+  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
   pm:type(dtype)
   crit:type(dtype)
 
-  local seq = torch.LongTensor(opt.seq_length, opt.batch_size):random(opt.pixel_size)
-  seq[{ {4, 7}, 1 }] = 0
-  seq[{ {5, 7}, 4 }] = 0
-  local imgs = torch.randn(opt.batch_size, opt.input_encoding_size):type(dtype)
+  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
+  local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
+  local seq = torch.cat(pixels, borders, 3):type(dtype)
 
   local params, grad_params = pm:getParameters()
-  print('number of parameters:', params:nElement(), grad_params:nElement())
-  local lstm_params = 4*(opt.input_encoding_size + opt.rnn_size)*opt.rnn_size + opt.rnn_size*4*2
-  local output_params = opt.rnn_size * (opt.pixel_size + 1) + opt.pixel_size+1
-  local table_params = (opt.pixel_size + 1) * opt.input_encoding_size
-  local expected_params = lstm_params + output_params + table_params
-  print('expected:', expected_params)
-
   local function lossFun()
     grad_params:zero()
-    local output = pm:forward{imgs, seq}
+    local output = pm:forward(seq)
     local loss = crit:forward(output, seq)
     local gradOutput = crit:backward(output, seq)
-    pm:backward({imgs, seq}, gradOutput)
+    pm:backward(seq, gradOutput)
     return loss
   end
 
   local loss
   local grad_cache = grad_params:clone():fill(1e-8)
   print('trying to overfit the language model on toy data:')
-  for t=1,30 do
+  for t=1,300 do
     loss = lossFun()
     -- test that initial loss makes sense
     if t == 1 then tester:assertlt(math.abs(math.log(opt.pixel_size+1) - loss), 0.1) end
     grad_cache:addcmul(1, grad_params, grad_params)
     params:addcdiv(-1e-1, grad_params, torch.sqrt(grad_cache)) -- adagrad update
-    print(string.format('iteration %d/30: loss %f', t, loss))
+    print(string.format('iteration %d/300: loss %f', t, loss))
   end
   -- holy crap adagrad destroys the loss function!
 
@@ -343,13 +293,16 @@ local function sample()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
   opt.pixel_size = 3
-  opt.output_size = 10
+  opt.num_mixtures = 2
+  opt.recurrent_stride = 3
   opt.rnn_size = 8
   opt.num_layers = 2
   opt.dropout = 0
   opt.seq_length = 7
-  opt.batch_size = 6
+  opt.batch_size = 2
+  opt.mult_in = true
   local pm = nn.PixelModel(opt)
+  pm:type(dtype)
 
   local imgs = torch.randn(opt.batch_size, opt.input_encoding_size):type(dtype)
   local seq = pm:sample(imgs)
@@ -363,6 +316,7 @@ local function sample()
 end
 
 
+--[[
 -- check that we can call :sample_beam() and that correct-looking things happen
 -- these are not very exhaustive tests and basic sanity checks
 local function sample_beam()
@@ -421,10 +375,10 @@ end
 --tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
--- tests.gradCheckPM = gradCheckPM
+--tests.gradCheckPM = gradCheckPM
 -- tests.gradCheckCrit = gradCheckCrit
-tests.gradCheck = gradCheck
---tests.overfit = overfit
+-- tests.gradCheck = gradCheck
+tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam
 
