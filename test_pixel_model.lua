@@ -108,16 +108,16 @@ local function gradCheckPM()
   pm:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
-  local seq = torch.cat(pixels, borders, 3):type(dtype)
+  --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
+  --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
   -- evaluate the analytic gradient
-  local output = pm:forward(seq)
+  local output = pm:forward(pixels)
   local w = torch.randn(output:size())
   -- generate random weighted sum criterion
   local loss = torch.sum(torch.cmul(output, w))
   local gradOutput = w
-  local gradInput = pm:backward(seq, gradOutput)
+  local gradInput = pm:backward(pixels, gradOutput)
 
   -- create a loss function wrapper
   local function f(x)
@@ -126,7 +126,7 @@ local function gradCheckPM()
     return loss
   end
 
-  local gradInput_num = gradcheck.numeric_gradient(f, seq, 1, 1e-6)
+  local gradInput_num = gradcheck.numeric_gradient(f, pixels, 1, 1e-6)
 
   -- print(gradInput)
   -- print(gradInput_num)
@@ -144,7 +144,7 @@ end
 local function gradCheckCrit()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 1
+  opt.pixel_size = 3
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -157,23 +157,17 @@ local function gradCheckCrit()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
-  local seq = torch.cat(pixels, borders, 3):type(dtype)
+  --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
+  --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
   local gmms = torch.rand(opt.seq_length, opt.batch_size, crit.output_size)
-  local gmms_copy = gmms:clone()
-  local seq_copy = seq:clone()
-  tester:assertTensorEq(gmms_copy, gmms, 1e-4)
-  tester:assertTensorEq(seq_copy, seq, 1e-4)
   -- evaluate the analytic gradient
-  local loss = crit:forward(gmms, seq)
-  local gradInput = crit:backward(gmms, seq)
-  tester:assertTensorEq(gmms_copy, gmms, 1e-4)
-  tester:assertTensorEq(seq_copy, seq, 1e-4)
+  local loss = crit:forward(gmms, pixels)
+  local gradInput = crit:backward(gmms, pixels)
 
   -- create a loss function wrapper
   local function f(x)
-    local loss = crit:forward(x, seq)
+    local loss = crit:forward(x, pixels)
     return loss
   end
 
@@ -209,15 +203,15 @@ local function gradCheck()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
-  local seq = torch.cat(pixels, borders, 3):type(dtype)
+  --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
+  --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
   -- evaluate the analytic gradient
-  local target = seq:clone()
-  local output = pm:forward(seq)
+  local target = pixels:clone()
+  local output = pm:forward(pixels)
   local loss = crit:forward(output, target)
   local gradOutput = crit:backward(output, target)
-  local gradInput = pm:backward(seq, gradOutput)
+  local gradInput = pm:backward(pixels, gradOutput)
 
   -- create a loss function wrapper
   local function f(x)
@@ -226,7 +220,7 @@ local function gradCheck()
     return loss
   end
 
-  local gradInput_num = gradcheck.numeric_gradient(f, seq, 1, 1e-6)
+  local gradInput_num = gradcheck.numeric_gradient(f, pixels, 1, 1e-6)
 
   print(gradInput)
   print(gradInput_num)
@@ -259,16 +253,16 @@ local function overfit()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
-  local seq = torch.cat(pixels, borders, 3):type(dtype)
+  --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
+  --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
   local params, grad_params = pm:getParameters()
   local function lossFun()
     grad_params:zero()
-    local output = pm:forward(seq)
-    local loss = crit:forward(output, seq)
-    local gradOutput = crit:backward(output, seq)
-    pm:backward(seq, gradOutput)
+    local output = pm:forward(pixels)
+    local loss = crit:forward(output, pixels)
+    local gradOutput = crit:backward(output, pixels)
+    pm:backward(pixels, gradOutput)
     return loss
   end
 
@@ -375,10 +369,10 @@ end
 --tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
---tests.gradCheckPM = gradCheckPM
+-- tests.gradCheckPM = gradCheckPM
 -- tests.gradCheckCrit = gradCheckCrit
--- tests.gradCheck = gradCheck
-tests.overfit = overfit
+tests.gradCheck = gradCheck
+--tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam
 

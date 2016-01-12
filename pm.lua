@@ -25,13 +25,13 @@ function layer:__init(opt)
   self.recurrent_stride = utils.getopt(opt, 'recurrent_stride')
   self.mult_in = utils.getopt(opt, 'mult_in')
   if self.pixel_size == 3 then
-    self.output_size = self.num_mixtures * (3+3+3+1) + 1
+    self.output_size = self.num_mixtures * (3+3+3+1)
   else
-    self.output_size = self.num_mixtures * (1+1+0+1) + 1
+    self.output_size = self.num_mixtures * (1+1+0+1)
   end
   -- create the core lstm network.
   -- note +1 for addition end tokens, true for multiple input to deep layer connections.
-  self.core = LSTM.lstm2d(self.pixel_size+1, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
+  self.core = LSTM.lstm2d(self.pixel_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
   -- decoding the output to gaussian mixture parameters
   -- self.gmm = nn.GMMDecoder(self.pixel_size, self.num_mixtures)
   self:_createInitState(1) -- will be lazily resized later during forward passes
@@ -395,9 +395,9 @@ function crit:__init(pixel_size, num_mixtures)
   self.pixel_size = pixel_size
   self.num_mixtures = num_mixtures
     if self.pixel_size == 3 then
-    self.output_size = self.num_mixtures * (3+3+3+1) + 1
+    self.output_size = self.num_mixtures * (3+3+3+1)
   else
-    self.output_size = self.num_mixtures * (1+1+0+1) + 1
+    self.output_size = self.num_mixtures * (1+1+0+1)
   end
   if pixel_size == 3 then self.var_mm = nn.MM() end
   self.w_softmax = nn.SoftMax()
@@ -423,7 +423,7 @@ function crit:updateOutput(input, target)
   local D_ = input:size(1)
   local N_ = input:size(2)
   local D,N,Mp1= target:size(1), target:size(2), target:size(3)
-  local ps = Mp1 - 1 -- pixel size
+  local ps = Mp1 -- pixel size
   assert(D == D_, 'input Tensor should have the same sequence length as the target')
   assert(N == N_, 'input Tensor should have the same batch size as the target')
   assert(ps == self.pixel_size, 'input dimensions of pixel do not match')
@@ -469,22 +469,22 @@ function crit:updateOutput(input, target)
   local g_w = self.w_softmax:forward(g_w_input:view(-1, nm))
   g_w = g_w:view(D, N, nm)
   -- border is a single scalar indicator
-  local borders = input[{{}, {}, -1}]:clone()
+  -- local borders = input[{{}, {}, -1}]:clone()
 
   -- do the loss the gradients
   local loss1 = 0 -- loss of pixels, Mixture of Gaussians
-  local loss2 = 0 -- loss of boundary, Sigmoid Loss
+  --local loss2 = 0 -- loss of boundary, Sigmoid Loss
   local grad_g_mean = torch.Tensor(g_mean:size()):type(g_mean:type())
   local grad_g_sigma = torch.Tensor(g_sigma:size()):type(g_sigma:type())
   local grad_g_w = torch.Tensor(g_w:size()):type(g_w:type())
-  local grad_borders = torch.Tensor(borders:size()):type(borders:type())
+  --local grad_borders = torch.Tensor(borders:size()):type(borders:type())
 
   for t=1,D do --iterate over sequence time
     local target_ = target[t]
     local gmm_mean_ = g_mean[t]
     local gmm_sigma_ = g_sigma[t]
     local gmm_w_ = g_w[t]
-    local border_ = borders[t]
+    --local border_ = borders[t]
     for b=1,N do -- iterate over batches
       local target_pixel_ = target_[b]:narrow(1,1,ps)
       local target_border_ = target_[{b,Mp1}]
@@ -498,11 +498,11 @@ function crit:updateOutput(input, target)
       local pdf = torch.sum(gmm_rpb_)
       loss1 = loss1 - torch.log(pdf)
 
-      if target_border_ >= 0.5 then
-        loss2 = loss2 - torch.log((1/(1+torch.exp(-border_[b]))))
-      else
-        loss2 = loss2 - torch.log(1-1/(1+torch.exp(-border_[b])))
-      end
+      -- if target_border_ >= 0.5 then
+      --   loss2 = loss2 - torch.log((1/(1+torch.exp(-border_[b]))))
+      -- else
+      --   loss2 = loss2 - torch.log(1-1/(1+torch.exp(-border_[b])))
+      -- end
 
       -- normalize the responsibilities for backprop
       gmm_rpb_:div(pdf)
@@ -520,7 +520,7 @@ function crit:updateOutput(input, target)
       local gmm_temp_ = torch.bmm(torch.bmm(gmm_sigma_inv_, torch.bmm(mean_left_, mean_right_)), gmm_sigma_inv_) - gmm_sigma_inv_
       grad_g_sigma[{t, b, {}, {}, {}}] = - torch.cmul(gmm_rpb_, gmm_temp_) * 0.5
       -- gradient of border is easy
-      grad_borders[{t,b}] =  1/(1+torch.exp(-border_[b])) - target_border_
+      -- grad_borders[{t,b}] =  1/(1+torch.exp(-border_[b])) - target_border_
     end
   end
 
@@ -528,7 +528,7 @@ function crit:updateOutput(input, target)
   -- mean undertake no changes
   grad_g_mean = grad_g_mean:view(D, N, -1)
   -- border undertake no changes
-  grad_borders = grad_borders:view(D, N, -1)
+  -- grad_borders = grad_borders:view(D, N, -1)
   -- gradient of weight is tricky, making it efficient together with softmax
   grad_g_w:add(g_w)
   grad_g_w = grad_g_w:view(D, N, -1)
@@ -558,17 +558,17 @@ function crit:updateOutput(input, target)
   grad_g_var:div(D*N)
   if ps == 3 then grad_g_cov:div(D*N) end
   grad_g_w:div(D*N)
-  grad_borders:div(D*N)
+  -- grad_borders:div(D*N)
 
   -- concat to gradInput
   if self.pixel_size == 3 then
     -- torch does not allow us to concat more than 2 tensors for FloatTensors
-    self.gradInput = torch.cat(torch.cat(torch.cat(grad_g_mean, grad_g_var), torch.cat(grad_g_cov, grad_g_w)), grad_borders)
+    self.gradInput = torch.cat(torch.cat(grad_g_mean, grad_g_var), torch.cat(grad_g_cov, grad_g_w))
   else
-    self.gradInput = torch.cat(torch.cat(grad_g_mean, grad_g_var), torch.cat(grad_g_w, grad_borders))
+    self.gradInput = torch.cat(torch.cat(grad_g_mean, grad_g_var), grad_g_w)
   end
   -- return the loss
-  self.output = (loss1 + loss2) / (D * N)
+  self.output = (loss1) / (D * N)
   return self.output
 end
 

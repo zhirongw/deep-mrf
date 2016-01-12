@@ -19,21 +19,22 @@ cmd:text('Options')
 
 -- Data input settings
 cmd:option('-folder_path','','path to the preprocessed textures')
-cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
-cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
+--cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
+--cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 
 -- Model settings
 cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',3,'number of layers in stacked RNN/LSTMs')
-cmd:option('-num_output_mixtures',20,'number of gaussian mixtures to encode the output pixel')
+cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
+cmd:option('-patch_size',7,'size of the neighbor patch that a pixel is conditioned on')
 
 -- Optimization: General
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel RNN')
-cmd:option('-seq_per_img',5,'number of captions to sample for each image during training. Done for efficiency since CNN forward pass is expensive. E.g. coco has 5 sents/image')
+cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 -- Optimization: for the Pixel Model
 cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',4e-4,'learning rate')
@@ -97,13 +98,17 @@ else
   local pmOpt = {}
   pmOpt.pixel_size = loader:getChannelSize()
   pmOpt.rnn_size = opt.rnn_size
+  pmOpt.num_mixtures = opt.num_mixtures
+  pmOpt.recurrent_stride = loader:getImgSize() + 1
   pmOpt.num_layers = opt.num_layers
   pmOpt.dropout = opt.drop_prob_pm
   pmOpt.seq_length = loader:getSeqLength()
-  pmOpt.batch_size = opt.batch_size * opt.seq_per_img
+  pmOpt.batch_size = opt.batch_size
+  pmOpt.seq_length = opt.patch_size * (loader:getImgSize() + 1)
+  pmOpt.mult_in = opt.mult_in
   protos.pm = nn.PixelModel(pmOpt)
   -- criterion for the pixel model
-  protos.crit = nn.PixelModelCriterion()
+  protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures)
 end
 
 -- ship everything to GPU, maybe
@@ -121,7 +126,6 @@ assert(params:nElement() == grad_params:nElement())
 -- for checkpointing to write significantly smaller checkpoint files
 local thin_pm = protos.pm:clone()
 thin_pm.core:share(protos.pm.core, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
-thin_pm.gmm:share(protos.pm.gmm, 'weight', 'bias')
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
 local pm_modules = thin_pm:getModulesList()
 for k,v in pairs(pm_modules) do net_utils.sanitize_gradients(v) end
@@ -204,17 +208,17 @@ local function lossFun()
   -- data.seq: LxM where L is sequence length upper bound, and M = N*seq_per_img
 
   -- forward the pixel model
-  local mog_states = protos.pm:forward(data.pixels)
+  local output = protos.pm:forward(data.pixels)
   -- forward the pixel model criterion
-  local loss = protos.crit:forward(mog_states, data.pixels)
+  local loss = protos.crit:forward(output, data.pixels)
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
   -- backprop criterion
-  local dmog_states = protos.crit:backward(mog_states, data.pixels)
+  local doutput = protos.crit:backward(output, data.pixels)
   -- backprop pixel model
-  local dpixels = unpack(protos.pm:backward(data.pixels, dmog_states))
+  local dpixels = protos.pm:backward(data.pixels, doutput)
 
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
@@ -283,7 +287,7 @@ while true do
     end
   end
 
-  -- decay the learning rate for both LM and CNN
+  -- decay the learning rate
   local learning_rate = opt.learning_rate
   if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then
     local frac = (iter - opt.learning_rate_decay_start) / opt.learning_rate_decay_every

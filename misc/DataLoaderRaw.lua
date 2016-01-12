@@ -11,6 +11,7 @@ require 'image'
 local DataLoaderRaw = torch.class('DataLoaderRaw')
 
 function DataLoaderRaw:__init(opt)
+  --- dataLoader of about 100 texture images
   print('DataLoaderRaw loading images from folder: ', opt.folder_path)
 
   self.files = {}
