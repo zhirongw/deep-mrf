@@ -156,18 +156,18 @@ local function gradCheckCrit()
   local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
   crit:type(dtype)
 
-  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
+  local target = torch.rand(opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
-  local gmms = torch.rand(opt.seq_length, opt.batch_size, crit.output_size)
+  local gmms = torch.rand(opt.batch_size, crit.output_size)
   -- evaluate the analytic gradient
-  local loss = crit:forward(gmms, pixels)
-  local gradInput = crit:backward(gmms, pixels)
+  local loss = crit:forward(gmms, target)
+  local gradInput = crit:backward(gmms, target)
 
   -- create a loss function wrapper
   local function f(x)
-    local loss = crit:forward(x, pixels)
+    local loss = crit:forward(x, target)
     return loss
   end
 
@@ -203,11 +203,11 @@ local function gradCheck()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
+  local target = torch.rand(opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
   -- evaluate the analytic gradient
-  local target = pixels:clone()
   local output = pm:forward(pixels)
   local loss = crit:forward(output, target)
   local gradOutput = crit:backward(output, target)
@@ -370,7 +370,7 @@ end
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 -- tests.gradCheckPM = gradCheckPM
--- tests.gradCheckCrit = gradCheckCrit
+--tests.gradCheckCrit = gradCheckCrit
 tests.gradCheck = gradCheck
 --tests.overfit = overfit
 --tests.sample = sample
