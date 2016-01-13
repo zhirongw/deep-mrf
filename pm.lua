@@ -21,8 +21,8 @@ function layer:__init(opt)
   self.num_mixtures = utils.getopt(opt, 'num_mixtures')
   local dropout = utils.getopt(opt, 'dropout', 0)
   -- options for Pixel Model
-  self.seq_length = utils.getopt(opt, 'seq_length')
   self.recurrent_stride = utils.getopt(opt, 'recurrent_stride')
+  self.seq_length = utils.getopt(opt, 'seq_length')
   self.mult_in = utils.getopt(opt, 'mult_in')
   if self.pixel_size == 3 then
     self.output_size = self.num_mixtures * (3+3+3+1)
@@ -30,10 +30,8 @@ function layer:__init(opt)
     self.output_size = self.num_mixtures * (1+1+0+1)
   end
   -- create the core lstm network.
-  -- note +1 for addition end tokens, true for multiple input to deep layer connections.
+  -- mult_in for multiple input to deep layer connections.
   self.core = LSTM.lstm2d(self.pixel_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
-  -- decoding the output to gaussian mixture parameters
-  -- self.gmm = nn.GMMDecoder(self.pixel_size, self.num_mixtures)
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
 
@@ -59,10 +57,8 @@ function layer:createClones()
   -- construct the net clones
   print('constructing clones inside the PixelModel')
   self.clones = {self.core}
-  self.gmms = {self.gmm}
   for t=2,self.seq_length do
     self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
-    -- self.gmms[t] = self.gmm:clone('weight', 'bias', 'gradWeight', 'gradBias')
   end
 end
 
@@ -73,17 +69,12 @@ end
 function layer:parameters()
   -- we only have two internal modules, return their params
   local p1,g1 = self.core:parameters()
-  -- local p2,g2 = self.gmm:parameters()
 
   local params = {}
   for k,v in pairs(p1) do table.insert(params, v) end
-  -- assert(p2 == nil, 'GMM decoder should have no params')
-  -- for k,v in pairs(p2) do table.insert(params, v) end
 
   local grad_params = {}
   for k,v in pairs(g1) do table.insert(grad_params, v) end
-  -- assert(g2 == nil, 'GMM decoder should have no params')
-  -- for k,v in pairs(g2) do table.insert(grad_params, v) end
 
   -- todo: invalidate self.clones if params were requested?
   -- what if someone outside of us decided to call getParameters() or something?

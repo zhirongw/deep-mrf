@@ -2,11 +2,12 @@ require 'torch'
 require 'nn'
 require 'nngraph'
 -- local imports
+require 'pm'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
 require 'misc.DataLoaderRaw'
-require 'misc.DataLoader'
+--require 'misc.DataLoader'
 
 -------------------------------------------------------------------------------
 -- Input arguments and options
@@ -19,12 +20,13 @@ cmd:text('Options')
 
 -- Data input settings
 cmd:option('-folder_path','','path to the preprocessed textures')
+cmd:option('-image_size',256,'resize the input image to')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
 --cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 
 -- Model settings
-cmd:option('-rnn_size',512,'size of the rnn in number of hidden nodes in each layer')
+cmd:option('-rnn_size',12,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',3,'number of layers in stacked RNN/LSTMs')
 cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
 cmd:option('-patch_size',7,'size of the neighbor patch that a pixel is conditioned on')
@@ -34,7 +36,7 @@ cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run fore
 cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel RNN')
-cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
+cmd:option('-mult_in', false, 'An extension of the LSTM architecture')
 -- Optimization: for the Pixel Model
 cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',4e-4,'learning rate')
@@ -45,10 +47,8 @@ cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
-cmd:option('-val_images_use', 3200, 'how many images to use when periodically evaluating the validation loss? (-1 = all)')
 cmd:option('-save_checkpoint_every', 2500, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', '', 'folder to save checkpoints into (empty = this folder)')
-cmd:option('-language_eval', 0, 'Evaluate language as well (1 = yes, 0 = no)? BLEU/CIDEr/METEOR/ROUGE_L? requires coco-caption code from Github.')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc
@@ -77,7 +77,7 @@ end
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
-local loader = DataLoaderRaw{folder_path = opt.data_folder}
+local loader = DataLoaderRaw{folder_path = opt.folder_path, img_size = opt.image_size}
 
 -------------------------------------------------------------------------------
 -- Initialize the networks
@@ -99,12 +99,11 @@ else
   pmOpt.pixel_size = loader:getChannelSize()
   pmOpt.rnn_size = opt.rnn_size
   pmOpt.num_mixtures = opt.num_mixtures
-  pmOpt.recurrent_stride = loader:getImgSize() + 1
   pmOpt.num_layers = opt.num_layers
   pmOpt.dropout = opt.drop_prob_pm
-  pmOpt.seq_length = loader:getSeqLength()
   pmOpt.batch_size = opt.batch_size
-  pmOpt.seq_length = opt.patch_size * (loader:getImgSize() + 1)
+  pmOpt.recurrent_stride = opt.patch_size
+  pmOpt.seq_length = opt.patch_size * opt.patch_size - 1
   pmOpt.mult_in = opt.mult_in
   protos.pm = nn.PixelModel(pmOpt)
   -- criterion for the pixel model
@@ -153,14 +152,11 @@ local function eval_split(split, evalopt)
   while true do
 
     -- fetch a batch of data
-    local data = loader:getBatch{batch_size = opt.batch_size, split = split, seq_per_img = opt.seq_per_img}
-    data.images = net_utils.prepro(data.images, false, opt.gpuid >= 0) -- preprocess in place, and don't augment
-    n = n + data.images:size(1)
+    local data = loader:getBatch{batch_size = opt.batch_size, patch_size = opt.patch_size}
 
     -- forward the model to get loss
-    local feats = protos.cnn:forward(data.images)
-    local logprobs = protos.pm:forward{feats, data.labels}
-    local loss = protos.crit:forward(logprobs, data.labels)
+    local gmms = protos.pm:forward(data.pixels)
+    local loss = protos.crit:forward(gmms, data.targets)
     loss_sum = loss_sum + loss
     loss_evals = loss_evals + 1
 
@@ -193,7 +189,7 @@ end
 -------------------------------------------------------------------------------
 -- Loss function
 -------------------------------------------------------------------------------
-local iter = 0
+local iter = 1
 local function lossFun()
   protos.pm:training()
   grad_params:zero()
@@ -202,23 +198,20 @@ local function lossFun()
   -- Forward pass
   -----------------------------------------------------------------------------
   -- get batch of data
-  local data = loader:getBatch{batch_size = opt.batch_size, split = 'train', seq_per_img = opt.seq_per_img}
-  data.images = net_utils.prepro(data.images, true, opt.gpuid >= 0) -- preprocess in place, do data augmentation
-  -- data.images: Nx3x224x224
-  -- data.seq: LxM where L is sequence length upper bound, and M = N*seq_per_img
+  local data = loader:getBatch{batch_size = opt.batch_size, patch_size = opt.patch_size, gpu = opt.gpuid, split = 'train'}
 
   -- forward the pixel model
-  local output = protos.pm:forward(data.pixels)
+  local gmms = protos.pm:forward(data.pixels)
   -- forward the pixel model criterion
-  local loss = protos.crit:forward(output, data.pixels)
+  local loss = protos.crit:forward(gmms, data.targets)
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
   -- backprop criterion
-  local doutput = protos.crit:backward(output, data.pixels)
+  local dgmms = protos.crit:backward(gmms, data.targets)
   -- backprop pixel model
-  local dpixels = protos.pm:backward(data.pixels, doutput)
+  local dpixels = protos.pm:backward(data.pixels, dgmms)
 
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))

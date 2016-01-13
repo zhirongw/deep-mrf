@@ -39,11 +39,24 @@ function DataLoaderRaw:__init(opt)
   self.N = #self.files
   print('DataLoaderRaw found ' .. self.N .. ' images')
 
+  -- how about working on the first texture? D1.png
   self.iterator = 1
+  self.images = {}
+  local img = image.load(self.files[self.iterator], 3, 'float')
+  img = image.scale(img, opt.img_size, opt.img_size)
+  -- print(img[{{},1,1}])
+  self.images[self.iterator] = img
+  self.nChannels = img:size(1)
+  self.nHeight = img:size(2)
+  self.nWidth = img:size(3)
 end
 
 function DataLoaderRaw:resetIterator()
-  self.iterator = 1
+  --self.iterator = 1
+end
+
+function DataLoaderRaw:getChannelSize()
+  return self.nChannels
 end
 
 --[[
@@ -54,37 +67,36 @@ end
 --]]
 function DataLoaderRaw:getBatch(opt)
   -- may possibly preprocess the image by resizing, cropping
-  local seq_length = utils.getopt(opt, 'seq_length', 1000)
+  local patch_size = utils.getopt(opt, 'patch_size', 7)
+  local seq_length = patch_size * patch_size - 1
   local batch_size = utils.getopt(opt, 'batch_size', 5)
   -- load an image
-  local img = image.load(self.files[self.iterator], 3, 'byte')
-  local img_raw = image.scale(img, 256, 256)
-  local pixel_size = img_raw:size(3)
+  local img = self.images[self.iterator]
 
-  local pixels = torch.FloatTensor(seq_length, batch_size, pixel_size+1)
+  local patches = torch.FloatTensor(batch_size, self.nChannels, patch_size, patch_size)
 
-
-  local infos = {}
+  --local infos = {}
   for i=1,batch_size do
-    local ri = self.iterator
-    local ri_next = ri + 1 -- increment iterator
-    if ri_next > max_index then ri_next = 1; wrapped = true end -- wrap back around
-    self.iterator = ri_next
+    local h = torch.random(1, self.nHeight-patch_size+1)
+    local w = torch.random(1, self.nWidth-patch_size+1)
 
-    -- load the image
-    local img = image.load(self.files[ri], 3, 'byte')
-    img_batch_raw[i] = image.scale(img, 256, 256)
+    patches[i] = img[{{}, {h, h+patch_size-1}, {w, w+patch_size-1}}]
 
     -- and record associated info as well
-    local info_struct = {}
-    info_struct.id = self.ids[ri]
-    info_struct.file_path = self.files[ri]
-    table.insert(infos, info_struct)
+    -- local info_struct = {}
+    -- info_struct.id = self.ids[ri]
+    -- info_struct.file_path = self.files[ri]
+    -- table.insert(infos, info_struct)
   end
-
+  patches = patches:view(batch_size, self.nChannels, -1)
+  patches = patches:permute(3, 1, 2)
   local data = {}
-  data.images = img_batch_raw
-  data.bounds = {it_pos_now = self.iterator, it_max = self.N, wrapped = wrapped}
-  data.infos = infos
+  data.pixels = patches[{{1,seq_length},{},{}}]
+  data.targets = patches[{seq_length+1,{},{}}]
+  if opt.gpu >= 0 then
+    data.pixels = data.pixels:cuda()
+    data.targets = data.targets:cuda()
+  end
+  -- data.infos = infos
   return data
 end
