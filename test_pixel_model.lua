@@ -156,18 +156,18 @@ local function gradCheckCrit()
   local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
   crit:type(dtype)
 
-  local target = torch.rand(opt.batch_size, opt.pixel_size)
+  local gmms = torch.rand(opt.batch_size, crit.output_size)
+  local targets = torch.rand(opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
-  local gmms = torch.rand(opt.batch_size, crit.output_size)
   -- evaluate the analytic gradient
-  local loss = crit:forward(gmms, target)
-  local gradInput = crit:backward(gmms, target)
+  local loss = crit:forward(gmms, targets)
+  local gradInput = crit:backward(gmms, targets)
 
   -- create a loss function wrapper
   local function f(x)
-    local loss = crit:forward(x, target)
+    local loss = crit:forward(x, targets)
     return loss
   end
 
@@ -203,27 +203,27 @@ local function gradCheck()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  local target = torch.rand(opt.batch_size, opt.pixel_size)
+  local targets = torch.rand(opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
   -- evaluate the analytic gradient
   local output = pm:forward(pixels)
-  local loss = crit:forward(output, target)
-  local gradOutput = crit:backward(output, target)
+  local loss = crit:forward(output, targets)
+  local gradOutput = crit:backward(output, targets)
   local gradInput = pm:backward(pixels, gradOutput)
 
   -- create a loss function wrapper
   local function f(x)
     local output = pm:forward(x)
-    local loss = crit:forward(output, target)
+    local loss = crit:forward(output, targets)
     return loss
   end
 
   local gradInput_num = gradcheck.numeric_gradient(f, pixels, 1, 1e-6)
 
-  print(gradInput)
-  print(gradInput_num)
+  --print(gradInput)
+  --print(gradInput_num)
   --local g = gradInput:view(-1)
   --local gn = gradInput_num:view(-1)
   --for i=1,g:nElement() do
@@ -253,29 +253,28 @@ local function overfit()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
-  --local seq = torch.cat(pixels, borders, 3):type(dtype)
+  local targets = torch.rand(opt.batch_size, opt.pixel_size)
 
   local params, grad_params = pm:getParameters()
   local function lossFun()
     grad_params:zero()
     local output = pm:forward(pixels)
-    local loss = crit:forward(output, pixels)
-    local gradOutput = crit:backward(output, pixels)
+    local loss = crit:forward(output, targets)
+    local gradOutput = crit:backward(output, targets)
     pm:backward(pixels, gradOutput)
     return loss
   end
 
   local loss
   local grad_cache = grad_params:clone():fill(1e-8)
-  print('trying to overfit the language model on toy data:')
-  for t=1,300 do
+  print('trying to overfit the pixel model on toy data:')
+  for t=1,5000 do
     loss = lossFun()
     -- test that initial loss makes sense
     if t == 1 then tester:assertlt(math.abs(math.log(opt.pixel_size+1) - loss), 0.1) end
     grad_cache:addcmul(1, grad_params, grad_params)
-    params:addcdiv(-1e-1, grad_params, torch.sqrt(grad_cache)) -- adagrad update
-    print(string.format('iteration %d/300: loss %f', t, loss))
+    params:addcdiv(-1e-3, grad_params, torch.sqrt(grad_cache)) -- adagrad update
+    print(string.format('iteration %d/5000: loss %f', t, loss))
   end
   -- holy crap adagrad destroys the loss function!
 
@@ -370,9 +369,9 @@ end
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 -- tests.gradCheckPM = gradCheckPM
---tests.gradCheckCrit = gradCheckCrit
+-- tests.gradCheckCrit = gradCheckCrit
 tests.gradCheck = gradCheck
---tests.overfit = overfit
+-- tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam
 

@@ -26,7 +26,7 @@ cmd:option('-image_size',256,'resize the input image to')
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 
 -- Model settings
-cmd:option('-rnn_size',12,'size of the rnn in number of hidden nodes in each layer')
+cmd:option('-rnn_size',100,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',3,'number of layers in stacked RNN/LSTMs')
 cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
 cmd:option('-patch_size',7,'size of the neighbor patch that a pixel is conditioned on')
@@ -39,7 +39,7 @@ cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel RNN')
 cmd:option('-mult_in', false, 'An extension of the LSTM architecture')
 -- Optimization: for the Pixel Model
 cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',4e-4,'learning rate')
+cmd:option('-learning_rate',4e-6,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 50000, 'every how many iterations thereafter to drop LR by half?')
 cmd:option('-optim_alpha',0.8,'alpha for adagrad/rmsprop/momentum/adam')
@@ -47,7 +47,7 @@ cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 2500, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 25000, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', '', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
@@ -115,6 +115,9 @@ if opt.gpuid >= 0 then
   for k,v in pairs(protos) do v:cuda() end
 end
 
+print('Training a 2D LSTM with number of layers: ', opt.num_layers)
+print('Hidden nodes in each layer: ', opt.rnn_size)
+print('The input image local patch size: ', opt.patch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
 print('total number of parameters in PM: ', params:nElement())
@@ -239,7 +242,7 @@ while true do
   print(string.format('iter %d: %f', iter, losses.total_loss))
 
   -- save checkpoint once in a while (or on final iteration)
-  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
+  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) and -1 then
 
     -- evaluate the validation performance
     local val_loss, val_predictions = eval_split('val', {val_images_use = opt.val_images_use})

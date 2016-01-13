@@ -3,6 +3,9 @@
 Multi-dimensional LSTMs for image generative models.
 
 TODO:
-2. Unit Test Pixel Model
-3. DataLoader of images
-4. Combine Gmm_decoder and crit for speed and stability
+4. Further optimize Mixture of Gaussian
+5. Inference Code
+
+-----
+BUGS:
+1. Why there can be negative loss? Probabilities that larger than 1?
