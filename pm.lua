@@ -111,7 +111,7 @@ function layer:updateOutput(input)
   assert(input:size(1) == self.seq_length)
   local batch_size = input:size(2)
   -- output is a table, indexed by the seq index.
-  self.output = torch.Tensor(batch_size, self.output_size):type(input:type())
+  self.output = torch.Tensor(self.seq_length, batch_size, self.output_size):type(input:type())
 
   self:_createInitState(batch_size)
 
@@ -131,11 +131,7 @@ function layer:updateOutput(input)
     -- save the state
     self._states[t] = {}
     for i=1,self.num_state do table.insert(self._states[t], lsts[i]) end
-    -- only predicting the very last pixel
-    if t == self.seq_length then
-      self.output = lsts[#lsts]
-    end
-    -- self.output[t] = lsts[#lsts]
+    self.output[t] = lsts[#lsts]
     -- inputs to Mixture of Gaussian encodings
     -- table.insert(self._gmm_encodings, lsts[#lsts])
     -- table.insert(self.output, self.gmms[t]:forward(lsts[#lsts])) -- last element is the output vector
@@ -161,17 +157,12 @@ function layer:updateGradInput(input, gradOutput)
   -- initialize the gradient of states all to zeros.
   -- this works when init_state is all zeros
   local _dstates = {[self.seq_length] = self.init_state}
-  local _doutputstate = torch.zeros(batch_size, self.output_size):type(input:type())
   for t=self.seq_length,1,-1 do
     --local dgmm_encodings = self.gmms[t]:backward(self._gmm_encodings[t], gradOutput[t])
     -- concat state gradients and output vector gradients at time step t
     local douts = {}
     for k=1,#_dstates[t] do table.insert(douts, _dstates[t][k]) end
-    if t == self.seq_length then
-      table.insert(douts, gradOutput)
-    else
-      table.insert(douts, _doutputstate)
-    end
+    table.insert(douts, gradOutput[t])
     -- backward LSTMs
     local dinputs = self.clones[t]:backward(self._inputs[t], douts)
 
@@ -245,7 +236,7 @@ function layer:sample(input, gt_pixel)
   local g_w_input = input:narrow(2,p*nm*ps+1, nm):clone()
   local g_w = torch.exp(g_w_input:view(-1, nm))
   g_w = g_w:cdiv(torch.repeatTensor(torch.sum(g_w,2),1,nm))
-  --print(g_w)
+  -- print(g_w)
 
   local pixels = torch.Tensor(N, ps):type(input:type())
   local train_pixels = gt_pixel:float()
@@ -275,7 +266,7 @@ function layer:sample(input, gt_pixel)
     -- print(g_mean[{b, mix_idx, {}}])
     -- print(g_clk[{b, mix_idx, {}, {}}])
     local p = mvn.rnd(g_mean[{b, mix_idx, {}}], g_clk[{b, mix_idx, {},{}}])
-    -- p = g_mean[{b, mix_idx[1], {}}]
+    -- p = g_mean[{b, mix_idx, {}}]
     pixels[b] = p
     -- evaluate the loss
     local g_rpb_ = torch.Tensor(nm):zero()
@@ -336,19 +327,21 @@ The criterion must be able to accomodate variably-sized sequences by making sure
 the gradients are properly set to zeros where appropriate.
 --]]
 function crit:updateOutput(input, target)
-  local N_ = input:size(1)
-  local N,Mp1= target:size(1), target:size(2)
+  local D_ = input:size(1)
+  local N_ = input:size(2)
+  local D,N,Mp1= target:size(1), target:size(2), target:size(3)
   local ps = Mp1 -- pixel size
+  assert(D == D_, 'input Tensor should have the same sequence length as the target')
   assert(N == N_, 'input Tensor should have the same batch size as the target')
   assert(ps == self.pixel_size, 'input dimensions of pixel do not match')
   local nm = self.num_mixtures
 
   -- decode the gmms first
   -- mean undertake no changes
-  local g_mean_input = input:narrow(2,1,nm*ps):clone()
-  local g_mean = g_mean_input:view(N, nm, ps)
+  local g_mean_input = input:narrow(3,1,nm*ps):clone()
+  local g_mean = g_mean_input:view(D, N, nm, ps)
   -- we use 6 numbers to denote the cholesky depositions
-  local g_var_input = input:narrow(2, nm*ps+1, nm*ps):clone()
+  local g_var_input = input:narrow(3, nm*ps+1, nm*ps):clone()
   g_var_input = g_var_input:view(-1, ps)
   local g_var = self.var_exp:forward(g_var_input)
 
@@ -358,11 +351,11 @@ function crit:updateOutput(input, target)
   local g_sigma
   p = 2
   if ps == 3 then
-    g_cov_input = input:narrow(2, p*nm*ps+1, nm*ps):clone()
+    g_cov_input = input:narrow(3, p*nm*ps+1, nm*ps):clone()
     g_cov_input = g_cov_input:view(-1, 3)
     p = p + 1
-    g_clk = torch.Tensor(N*nm, 3, 3):fill(0):type(g_var_input:type())
-    g_clk_T = torch.Tensor(N*nm, 3, 3):fill(0):type(g_var_input:type())
+    g_clk = torch.Tensor(D*N*nm, 3, 3):fill(0):type(g_var_input:type())
+    g_clk_T = torch.Tensor(D*N*nm, 3, 3):fill(0):type(g_var_input:type())
     g_clk[{{}, 1, 1}] = g_var[{{}, 1}]
     g_clk[{{}, 2, 2}] = g_var[{{}, 2}]
     g_clk[{{}, 3, 3}] = g_var[{{}, 3}]
@@ -376,22 +369,20 @@ function crit:updateOutput(input, target)
     g_clk_T[{{}, 1, 3}] = g_cov_input[{{}, 2}]
     g_clk_T[{{}, 2, 3}] = g_cov_input[{{}, 3}]
     g_sigma = self.var_mm:forward({g_clk, g_clk_T})
-    g_clk = g_clk:view(N, nm, ps, ps)
-    g_clk_T = g_clk_T:view(N, nm, ps, ps)
+    g_clk = g_clk:view(D, N, nm, ps, ps)
+    g_clk_T = g_clk_T:view(D, N, nm, ps, ps)
   else
     g_clk = g_var
-    g_clk = g_clk:view(N, nm, ps, ps)
+    g_clk = g_clk:view(D, N, nm, ps, ps)
     g_clk_T = g_var
-    g_clk_T = g_clk_T:view(N, nm, ps, ps)
+    g_clk_T = g_clk_T:view(D, N, nm, ps, ps)
     g_sigma = torch.cmul(g_clk, g_clk_T)
   end
-  g_sigma = g_sigma:view(N, nm, ps, ps)
+  g_sigma = g_sigma:view(D, N, nm, ps, ps)
   -- weights coeffs is taken care of at final loss, for computation efficiency and stability
-  local g_w_input = input:narrow(2,p*nm*ps+1, nm):clone()
+  local g_w_input = input:narrow(3,p*nm*ps+1, nm):clone()
   local g_w = self.w_softmax:forward(g_w_input:view(-1, nm))
-  g_w = g_w:view(N, nm)
-  -- border is a single scalar indicator
-  -- local borders = input[{{}, {}, -1}]:clone()
+  g_w = g_w:view(D, N, nm)
 
   -- do the loss the gradients
   local loss1 = 0 -- loss of pixels, Mixture of Gaussians
@@ -414,47 +405,50 @@ function crit:updateOutput(input, target)
     g_mean_x = g_mean
     target_x = target
   end
-  for b=1,N do -- iterate over batches
-    -- Start of CPU. this is the only place that should take place in CPU
-    local target_pixel_ = target_x[b]:narrow(1,1,ps)
-    -- can we vectorize this? Now constrains by the MVN.PDF
-    local g_rpb_ = torch.Tensor(nm):zero()
-    local g_sigma_inv_ = torch.Tensor(g_sigma[b]:size())
-    for g=1,nm do -- iterate over mixtures
-      g_rpb_[g] = mvn.pdf(target_pixel_, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
-      g_sigma_inv_[g] = torch.inverse(g_sigma_x[{b,g,{},{}}])
-    end
-    local pdf = torch.sum(g_rpb_)
-    loss1 = loss1 - torch.log(pdf)
-    if input:type() == 'torch.CudaTensor' then
-      g_rpb_ = g_rpb_:cuda()
-      g_sigma_inv_ = g_sigma_inv_:cuda()
-    end
-    -- End of CPU
 
-    -- normalize the responsibilities for backprop
-    g_rpb_:div(pdf)
+  for t=1,D do -- iterate over timestep
+    for b=1,N do -- iterate over batches
+      -- Start of CPU. this is the only place that should take place in CPU
+      local target_pixel_ = target_x[{t,b}]:narrow(1,1,ps)
+      -- can we vectorize this? Now constrains by the MVN.PDF
+      local g_rpb_ = torch.Tensor(nm):zero()
+      local g_sigma_inv_ = torch.Tensor(g_sigma[{t,b}]:size())
+      for g=1,nm do -- iterate over mixtures
+        g_rpb_[g] = mvn.pdf(target_pixel_, g_mean_x[{t,b,g,{}}], g_clk_x[{t,b,g,{},{}}]) * g_w_x[{t,b,g}]
+        g_sigma_inv_[g] = torch.inverse(g_sigma_x[{t,b,g,{},{}}])
+      end
+      local pdf = torch.sum(g_rpb_)
+      loss1 = loss1 - torch.log(pdf)
+      if input:type() == 'torch.CudaTensor' then
+        g_rpb_ = g_rpb_:cuda()
+        g_sigma_inv_ = g_sigma_inv_:cuda()
+      end
+      -- End of CPU
 
-    -- gradient of weight is tricky, making it efficient together with softmax
-    grad_g_w[{b, {}}] = - g_rpb_
-    -- gradient of mean
-    local g_mean_diff_ = torch.add(torch.repeatTensor(target[b]:narrow(1,1,ps),nm,1), -1, g_mean[b])
-    local mean_left_ = g_mean_diff_:view(nm, ps, 1)
-    local mean_right_ = g_mean_diff_:view(nm, 1, ps)
-    g_rpb_ = torch.repeatTensor(g_rpb_:view(-1,1), 1, ps)
-    grad_g_mean[{b, {}, {}}] = - torch.cmul(g_rpb_, torch.bmm(g_sigma_inv_, mean_left_))
-    -- gradient of covariance matrix
-    g_rpb_ = torch.repeatTensor(g_rpb_:view(-1,ps,1), 1, 1, ps)
-    local g_temp_ = torch.bmm(torch.bmm(g_sigma_inv_, torch.bmm(mean_left_, mean_right_)), g_sigma_inv_) - g_sigma_inv_
-    grad_g_sigma[{b, {}, {}, {}}] = - torch.cmul(g_rpb_, g_temp_) * 0.5
+      -- normalize the responsibilities for backprop
+      g_rpb_:div(pdf)
+
+      -- gradient of weight is tricky, making it efficient together with softmax
+      grad_g_w[{t,b, {}}] = - g_rpb_
+      -- gradient of mean
+      local g_mean_diff_ = torch.add(torch.repeatTensor(target[{t,b}]:narrow(1,1,ps),nm,1), -1, g_mean[{t,b}])
+      local mean_left_ = g_mean_diff_:view(nm, ps, 1)
+      local mean_right_ = g_mean_diff_:view(nm, 1, ps)
+      g_rpb_ = torch.repeatTensor(g_rpb_:view(-1,1), 1, ps)
+      grad_g_mean[{t,b, {}, {}}] = - torch.cmul(g_rpb_, torch.bmm(g_sigma_inv_, mean_left_))
+      -- gradient of covariance matrix
+      g_rpb_ = torch.repeatTensor(g_rpb_:view(-1,ps,1), 1, 1, ps)
+      local g_temp_ = torch.bmm(torch.bmm(g_sigma_inv_, torch.bmm(mean_left_, mean_right_)), g_sigma_inv_) - g_sigma_inv_
+      grad_g_sigma[{t,b, {}, {}, {}}] = - torch.cmul(g_rpb_, g_temp_) * 0.5
+    end
   end
 
   -- back prop encodings
   -- mean undertake no changes
-  grad_g_mean = grad_g_mean:view(N, -1)
+  grad_g_mean = grad_g_mean:view(D, N, -1)
   -- gradient of weight is tricky, making it efficient together with softmax
   grad_g_w:add(g_w)
-  grad_g_w = grad_g_w:view(N, -1)
+  grad_g_w = grad_g_w:view(D, N, -1)
   -- gradient of the var, and cov
   local grad_g_var
   local grad_g_cov
@@ -464,27 +458,27 @@ function crit:updateOutput(input, target)
     grad_g_sigma = grad_g_sigma:view(-1, 3, 3)
     local grad_g_clk = self.var_mm:backward({g_clk, g_clk_T}, grad_g_sigma)
     grad_g_clk = grad_g_clk[1]:mul(2)
-    grad_g_var = torch.Tensor(N*nm, ps):type(grad_g_clk:type())
-    grad_g_cov = torch.Tensor(N*nm, ps):type(grad_g_clk:type())
+    grad_g_var = torch.Tensor(D*N*nm, ps):type(grad_g_clk:type())
+    grad_g_cov = torch.Tensor(D*N*nm, ps):type(grad_g_clk:type())
     grad_g_var[{{}, 1}] = grad_g_clk[{{},1,1}]
     grad_g_var[{{}, 2}] = grad_g_clk[{{},2,2}]
     grad_g_var[{{}, 3}] = grad_g_clk[{{},3,3}]
     grad_g_var = self.var_exp:backward(g_var_input, grad_g_var)
-    grad_g_var = grad_g_var:view(N, -1)
+    grad_g_var = grad_g_var:view(D, N, -1)
     grad_g_cov[{{}, 1}] = grad_g_clk[{{},2,1}]
     grad_g_cov[{{}, 2}] = grad_g_clk[{{},3,1}]
     grad_g_cov[{{}, 3}] = grad_g_clk[{{},3,2}]
-    grad_g_cov = grad_g_cov:view(N, -1)
+    grad_g_cov = grad_g_cov:view(D, N, -1)
   else
     grad_g_var = torch.cmul(g_var, grad_g_sigma):mul(2)
     grad_g_var = self.var_exp:backward(g_var_input, grad_g_var)
-    grad_g_var = grad_g_var:view(N, -1)
+    grad_g_var = grad_g_var:view(D, N, -1)
   end
 
-  grad_g_mean:div(N)
-  grad_g_var:div(N)
-  if ps == 3 then grad_g_cov:div(N) end
-  grad_g_w:div(N)
+  grad_g_mean:div(D*N)
+  grad_g_var:div(D*N)
+  if ps == 3 then grad_g_cov:div(D*N) end
+  grad_g_w:div(D*N)
   -- grad_borders:div(D*N)
 
   -- concat to gradInput
@@ -495,7 +489,7 @@ function crit:updateOutput(input, target)
     self.gradInput = torch.cat(torch.cat(grad_g_mean, grad_g_var), grad_g_w)
   end
   -- return the loss
-  self.output = (loss1) / (N)
+  self.output = (loss1) / (D*N)
   return self.output
 end
 

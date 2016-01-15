@@ -95,7 +95,7 @@ function DataLoaderRaw:getBatch(opt)
   patches = patches:permute(3, 1, 2)
   local data = {}
   data.pixels = patches[{{1,seq_length},{},{}}]
-  data.targets = patches[{seq_length+1,{},{}}]
+  data.targets = patches[{{2,seq_length+1},{},{}}]
   if opt.gpu >= 0 then
     data.pixels = data.pixels:cuda()
     data.targets = data.targets:cuda()

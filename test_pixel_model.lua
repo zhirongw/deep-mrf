@@ -156,8 +156,8 @@ local function gradCheckCrit()
   local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
   crit:type(dtype)
 
-  local gmms = torch.rand(opt.batch_size, crit.output_size)
-  local targets = torch.rand(opt.batch_size, opt.pixel_size)
+  local gmms = torch.rand(opt.seq_length, opt.batch_size, crit.output_size)
+  local targets = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
@@ -203,7 +203,7 @@ local function gradCheck()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  local targets = torch.rand(opt.batch_size, opt.pixel_size)
+  local targets = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
@@ -253,7 +253,7 @@ local function overfit()
   crit:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  local targets = torch.rand(opt.batch_size, opt.pixel_size)
+  local targets = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
 
   local params, grad_params = pm:getParameters()
   local function lossFun()
@@ -339,7 +339,7 @@ end
 --tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
--- tests.gradCheckPM = gradCheckPM
+--tests.gradCheckPM = gradCheckPM
 -- tests.gradCheckCrit = gradCheckCrit
 tests.gradCheck = gradCheck
 -- tests.overfit = overfit

@@ -40,15 +40,15 @@ cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel RNN')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 -- Optimization: for the Pixel Model
 cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',4e-4,'learning rate')
+cmd:option('-learning_rate',4e-3,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 1000, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-learning_rate_decay_every', 100, 'every how many iterations thereafter to drop LR by half?')
 cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 500, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 50, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 

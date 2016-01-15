@@ -91,10 +91,31 @@ img = img:cuda()
 local loss_sum = 0
 local train_loss_sum = 0
 -- random seed the zero-th pixel
-local pixel = torch.rand(batch_size, pm.pixel_size):cuda()
+-- local pixel = torch.rand(batch_size, pm.pixel_size):cuda()
+local pixel
+local gmms
 -- loop through each timestep
 for h=1,pm.recurrent_stride do
   for w=1,pm.recurrent_stride do
+    if w < patch_size or h < patch_size then
+      pixel = img[{{}, {}, h, w}]
+      images[(h-1)*pm.recurrent_stride+w] = pixel
+    else
+      local train_pixel = img[{{}, {}, h, w}]
+      pixel, loss, train_loss = pm:sample(gmms, train_pixel)
+      images[(h-1)*pm.recurrent_stride+w] = pixel
+      loss_sum = loss_sum + loss
+      train_loss_sum = train_loss_sum + train_loss
+      print(train_loss .. '.....' .. loss)
+      if w == patch_size and h == patch_size then
+        print(train_loss .. '.....' .. loss)
+        print(train_pixel)
+        print(pixel)
+        print(gmms)
+        --exit()
+        end
+    end
+
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
     local inputs = {}
     inputs = {pixel, unpack(states[w-1])}
@@ -107,25 +128,8 @@ for h=1,pm.recurrent_stride do
     -- save the state
     states[w] = {}
     for i=1,pm.num_state do table.insert(states[w], lsts[i]) end
-
+    gmms = lsts[#lsts]
     ------------------------ debug ------------------------
-    if w < patch_size or h < patch_size then
-      pixel = img[{{}, {}, h, w}]
-      images[(h-1)*pm.recurrent_stride+w] = pixel
-    else
-      local train_pixel = img[{{}, {}, h, w}]
-      pixel, loss, train_loss = pm:sample(lsts[#lsts], train_pixel)
-      images[(h-1)*pm.recurrent_stride+w] = pixel
-      loss_sum = loss_sum + loss
-      train_loss_sum = train_loss_sum + train_loss
-      print(train_loss .. '.....' .. loss)
-      if w == patch_size and h == patch_size then
-        print(train_pixel)
-        print(pixel)
-        print(lsts[#lsts])
-        --exit()
-      end
-    end
   end
   collectgarbage()
 end
