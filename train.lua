@@ -21,34 +21,35 @@ cmd:text('Options')
 -- Data input settings
 cmd:option('-folder_path','','path to the preprocessed textures')
 cmd:option('-image_size',256,'resize the input image to')
+cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
 --cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 
 -- Model settings
-cmd:option('-rnn_size',100,'size of the rnn in number of hidden nodes in each layer')
-cmd:option('-num_layers',3,'number of layers in stacked RNN/LSTMs')
-cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
-cmd:option('-patch_size',7,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
+cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
+cmd:option('-num_mixtures',5,'number of gaussian mixtures to encode the output pixel')
+cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 
 -- Optimization: General
-cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
-cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
+cmd:option('-max_iters', 3000, 'max number of iterations to run for (-1 = run forever)')
+cmd:option('-batch_size',32,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel RNN')
-cmd:option('-mult_in', false, 'An extension of the LSTM architecture')
+cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 -- Optimization: for the Pixel Model
 cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',4e-6,'learning rate')
+cmd:option('-learning_rate',4e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 50000, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.8,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-learning_rate_decay_every', 1000, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 25000, 'how often to save a model checkpoint?')
-cmd:option('-checkpoint_path', '', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-save_checkpoint_every', 500, 'how often to save a model checkpoint?')
+cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc
@@ -77,7 +78,8 @@ end
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
-local loader = DataLoaderRaw{folder_path = opt.folder_path, img_size = opt.image_size}
+local loader = DataLoaderRaw{folder_path = opt.folder_path,
+                            img_size = opt.image_size, color = opt.color}
 
 -------------------------------------------------------------------------------
 -- Initialize the networks
@@ -117,7 +119,9 @@ end
 
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
 print('Hidden nodes in each layer: ', opt.rnn_size)
+print('Number of mixtures for output gaussians: ', opt.num_mixtures)
 print('The input image local patch size: ', opt.patch_size)
+print('Training batch size: ', opt.batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
 print('total number of parameters in PM: ', params:nElement())
@@ -192,7 +196,7 @@ end
 -------------------------------------------------------------------------------
 -- Loss function
 -------------------------------------------------------------------------------
-local iter = 1
+local iter = 0
 local function lossFun()
   protos.pm:training()
   grad_params:zero()
@@ -235,6 +239,7 @@ local loss_history = {}
 local val_loss_history = {}
 local best_score
 while true do
+  iter = iter + 1
 
   -- eval loss/gradient
   local losses = lossFun()
@@ -242,45 +247,31 @@ while true do
   print(string.format('iter %d: %f', iter, losses.total_loss))
 
   -- save checkpoint once in a while (or on final iteration)
-  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) and -1 then
+  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
 
     -- evaluate the validation performance
-    local val_loss, val_predictions = eval_split('val', {val_images_use = opt.val_images_use})
-    print('validation loss: ', val_loss)
-    val_loss_history[iter] = val_loss
+    -- local val_loss = eval_split('val', {val_images_use = opt.val_images_use})
+    -- print('validation loss: ', val_loss)
+    -- val_loss_history[iter] = val_loss
 
-    local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id)
+    local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id .. iter)
 
     -- write a (thin) json report
     local checkpoint = {}
     checkpoint.opt = opt
     checkpoint.iter = iter
     checkpoint.loss_history = loss_history
-    checkpoint.val_loss_history = val_loss_history
-    checkpoint.val_predictions = val_predictions -- save these too for CIDEr/METEOR/etc eval
+    -- checkpoint.val_loss_history = val_loss_history
+    -- checkpoint.val_predictions = val_predictions -- save these too for CIDEr/METEOR/etc eval
+    -- include the protos (which have weights) and save to file
+    local save_protos = {}
+    save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
+    checkpoint.protos = save_protos
+    torch.save(checkpoint_path .. '.t7', checkpoint)
+    print('wrote checkpoint to ' .. checkpoint_path .. '.t7')
 
-    utils.write_json(checkpoint_path .. '.json', checkpoint)
-    print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
-
-    -- write the full model checkpoint as well if we did better than ever
-    local current_score
-    -- use the (negative) validation loss as a score
-    current_score = -val_loss
-
-    if best_score == nil or current_score > best_score then
-      best_score = current_score
-      if iter > 0 then -- dont save on very first iteration
-        -- include the protos (which have weights) and save to file
-        local save_protos = {}
-        save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
-        checkpoint.protos = save_protos
-        -- also include the vocabulary mapping so that we can use the checkpoint
-        -- alone to run on arbitrary images without the data loader
-        -- checkpoint.vocab = loader:getVocab()
-        torch.save(checkpoint_path .. '.t7', checkpoint)
-        print('wrote checkpoint to ' .. checkpoint_path .. '.t7')
-      end
-    end
+    -- utils.write_json(checkpoint_path .. '.json', checkpoint)
+    -- print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
   end
 
   -- decay the learning rate
@@ -309,7 +300,6 @@ while true do
   end
 
   -- stopping criterions
-  iter = iter + 1
   if iter % 10 == 0 then collectgarbage() end -- good idea to do this once in a while, i think
   if loss0 == nil then loss0 = losses.total_loss end
   if losses.total_loss > loss0 * 20 then

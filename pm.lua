@@ -200,191 +200,106 @@ function layer:updateGradInput(input, gradOutput)
   return self.gradInput
 end
 
---[[
-runs the model forward in sampling mode to generate an image.
-Careful: make sure model is in :evaluate() mode if you're calling this.
-Returns: a DxNx(M+1) FloatTensor
-where D is sequence length and N is batch (so columns are sequences),
-and M is the number of image channels (3 for most RGB images)
---]]
-function layer:sample(opt)
-  local sample_max = utils.getopt(opt, 'sample_max', 1)
-  local beam_size = utils.getopt(opt, 'beam_size', 1)
-  local temperature = utils.getopt(opt, 'temperature', 1.0)
-  local batch_size = utils.getopt(opt, 'batch_size', 1)
-  if sample_max == 1 and beam_size > 1 then return self:sample_beam(imgs, opt) end -- indirection for beam search
-
-  self:_createInitState(batch_size)
-  local state = self.init_state
-
-  -- we will write output predictions into tensor seq
-  local seq = torch.FloatTensor(self.seq_length, batch_size, self.pixel_size+1):zero()
-  local seqLogprobs = torch.FloatTensor(self.seq_length, batch_size)
-  local logprobs -- logprobs predicted in last time step
-  -- feed in the random pixels
-  local xt = torch.Tensor(batch_size, self.pixel_size+1):uniform(0,1)
-  xt:select(2,self.pixel_size+1):fill(0)
-  for t=1,self.seq_length do
-    local sampleLogprobs
-    -- sample from the distribution of previous predictions
-    local inputs = {xt,unpack(state)}
-    local out = self.core:forward(inputs)
-    local g_encodings = out[self.num_state+1] -- last element is the output vector
-    state = {}
-    for i=1,self.num_state do table.insert(state, out[i]) end
-
-    local g_mean = g_encodings:narrow(1,1,self.num_mixture*self.pixel_size)
-    local g_var = g_encodings:narrow(1,self.num_mixture*self.pixel_size+1,self.num_mixture*self.pixel_size)
-    g_var = torch.exp(g_var_)
-    local g_cov
-    if pixel_size == 3 then g_cov = g_encodings:narrow(1,2*self.num_mixture*self.pixel_size+1,self.num_mixture*self.pixel_size) end
-    if pixel_size == 3 then g_cov = torch.tanh(g_cov) end
-    local g_w = g_encodings:narrow(1,3*self.num_mixture*self.pixel_size+1,self.num_mixture)
-    local g_w = nn.SoftMax()(g_w)
-
-    local prob_prev
-    if temperature == 1.0 then
-      prob_prev = torch.exp(logprobs) -- fetch prev distribution: shape Nx(M+1)
-    else
-      -- scale logprobs by temperature
-      prob_prev = torch.exp(torch.div(logprobs, temperature))
-    end
-    it = torch.multinomial(prob_prev, 1)
-    sampleLogprobs = logprobs:gather(2, it) -- gather the logprobs at sampled positions
-    it = it:view(-1):long() -- and flatten indices for downstream processing
-    t = self.lookup_table:forward(it)
-
-    if t > 1 then
-      seq[t-1] = xt -- record the samples
-      seqLogprobs[t-1] = sampleLogprobs:view(-1):float() -- and also their log likelihoods
-    end
-
+function layer:sample(input, gt_pixel)
+  local N, G = input:size(1), input:size(2)
+  local ps = self.pixel_size
+  local nm = self.num_mixtures
+  if ps == 3 then
+    assert(G == nm*(3+3+3+1), 'input dimensions of pixel do not match')
+  else
+    assert(G == nm*(1+1+0+1), 'input dimensions of pixel do not match')
   end
 
-  -- return the samples and their log likelihoods
-  return seq, seqLogprobs
-end
+  -- decode the gmms first
+  -- mean undertake no changes
+  local g_mean_input = input:narrow(2,1,nm*ps):clone()
+  local g_mean = g_mean_input:view(N, nm, ps)
+  -- we use 6 numbers to denote the cholesky depositions
+  local g_var_input = input:narrow(2, nm*ps+1, nm*ps):clone()
+  g_var_input = g_var_input:view(-1, ps)
+  local g_var = torch.exp(g_var_input)
 
---[[
-Implements beam search.
-]]--
-function layer:sample_beam(imgs, opt)
-  local beam_size = utils.getopt(opt, 'beam_size', 10)
-  local batch_size, feat_dim = imgs:size(1), imgs:size(2)
-  local function compare(a,b) return a.p > b.p end -- used downstream
-
-  assert(beam_size <= self.vocab_size+1, 'lets assume this for now, otherwise this corner case causes a few headaches down the road. can be dealt with in future if needed')
-
-  local seq = torch.LongTensor(self.seq_length, batch_size):zero()
-  local seqLogprobs = torch.FloatTensor(self.seq_length, batch_size)
-  -- lets process every image independently for now, for simplicity
-  for k=1,batch_size do
-
-    -- create initial states for all beams
-    self:_createInitState(beam_size)
-    local state = self.init_state
-
-    -- we will write output predictions into tensor seq
-    local beam_seq = torch.LongTensor(self.seq_length, beam_size):zero()
-    local beam_seq_logprobs = torch.FloatTensor(self.seq_length, beam_size):zero()
-    local beam_logprobs_sum = torch.zeros(beam_size) -- running sum of logprobs for each beam
-    local logprobs -- logprobs predicted in last time step, shape (beam_size, vocab_size+1)
-    local done_beams = {}
-    for t=1,self.seq_length+2 do
-
-      local xt, it, sampleLogprobs
-      local new_state
-      if t == 1 then
-        -- feed in the images
-        local imgk = imgs[{ {k,k} }]:expand(beam_size, feat_dim) -- k'th image feature expanded out
-        xt = imgk
-      elseif t == 2 then
-        -- feed in the start tokens
-        it = torch.LongTensor(beam_size):fill(self.vocab_size+1)
-        xt = self.lookup_table:forward(it)
-      else
-        --[[
-          perform a beam merge. that is,
-          for every previous beam we now many new possibilities to branch out
-          we need to resort our beams to maintain the loop invariant of keeping
-          the top beam_size most likely sequences.
-        ]]--
-        local logprobsf = logprobs:float() -- lets go to CPU for more efficiency in indexing operations
-        ys,ix = torch.sort(logprobsf,2,true) -- sorted array of logprobs along each previous beam (last true = descending)
-        local candidates = {}
-        local cols = math.min(beam_size,ys:size(2))
-        local rows = beam_size
-        if t == 3 then rows = 1 end -- at first time step only the first beam is active
-        for c=1,cols do -- for each column (word, essentially)
-          for q=1,rows do -- for each beam expansion
-            -- compute logprob of expanding beam q with word in (sorted) position c
-            local local_logprob = ys[{ q,c }]
-            local candidate_logprob = beam_logprobs_sum[q] + local_logprob
-            table.insert(candidates, {c=ix[{ q,c }], q=q, p=candidate_logprob, r=local_logprob })
-          end
-        end
-        table.sort(candidates, compare) -- find the best c,q pairs
-
-        -- construct new beams
-        new_state = net_utils.clone_list(state)
-        local beam_seq_prev, beam_seq_logprobs_prev
-        if t > 3 then
-          -- well need these as reference when we fork beams around
-          beam_seq_prev = beam_seq[{ {1,t-3}, {} }]:clone()
-          beam_seq_logprobs_prev = beam_seq_logprobs[{ {1,t-3}, {} }]:clone()
-        end
-        for vix=1,beam_size do
-          local v = candidates[vix]
-          -- fork beam index q into index vix
-          if t > 3 then
-            beam_seq[{ {1,t-3}, vix }] = beam_seq_prev[{ {}, v.q }]
-            beam_seq_logprobs[{ {1,t-3}, vix }] = beam_seq_logprobs_prev[{ {}, v.q }]
-          end
-          -- rearrange recurrent states
-          for state_ix = 1,#new_state do
-            -- copy over state in previous beam q to new beam at vix
-            new_state[state_ix][vix] = state[state_ix][v.q]
-          end
-          -- append new end terminal at the end of this beam
-          beam_seq[{ t-2, vix }] = v.c -- c'th word is the continuation
-          beam_seq_logprobs[{ t-2, vix }] = v.r -- the raw logprob here
-          beam_logprobs_sum[vix] = v.p -- the new (sum) logprob along this beam
-
-          if v.c == self.vocab_size+1 or t == self.seq_length+2 then
-            -- END token special case here, or we reached the end.
-            -- add the beam to a set of done beams
-            table.insert(done_beams, {seq = beam_seq[{ {}, vix }]:clone(),
-                                      logps = beam_seq_logprobs[{ {}, vix }]:clone(),
-                                      p = beam_logprobs_sum[vix]
-                                     })
-          end
-        end
-
-        -- encode as vectors
-        it = beam_seq[t-2]
-        xt = self.lookup_table:forward(it)
-      end
-
-      if new_state then state = new_state end -- swap rnn state, if we reassinged beams
-
-      local inputs = {xt,unpack(state)}
-      local out = self.core:forward(inputs)
-      logprobs = out[self.num_state+1] -- last element is the output vector
-      state = {}
-      for i=1,self.num_state do table.insert(state, out[i]) end
-    end
-
-    table.sort(done_beams, compare)
-    seq[{ {}, k }] = done_beams[1].seq -- the first beam has highest cumulative score
-    seqLogprobs[{ {}, k }] = done_beams[1].logps
+  local g_cov_input
+  local g_clk
+  p = 2
+  if ps == 3 then
+    g_cov_input = input:narrow(2, p*nm*ps+1, nm*ps):clone()
+    g_cov_input = g_cov_input:view(-1, 3)
+    p = p + 1
+    g_clk = torch.Tensor(N*nm, 3, 3):fill(0):type(g_var_input:type())
+    g_clk_T = torch.Tensor(N*nm, 3, 3):fill(0):type(g_var_input:type())
+    g_clk[{{}, 1, 1}] = g_var[{{}, 1}]
+    g_clk[{{}, 2, 2}] = g_var[{{}, 2}]
+    g_clk[{{}, 3, 3}] = g_var[{{}, 3}]
+    g_clk[{{}, 2, 1}] = g_cov_input[{{}, 1}]
+    g_clk[{{}, 3, 1}] = g_cov_input[{{}, 2}]
+    g_clk[{{}, 3, 2}] = g_cov_input[{{}, 3}]
+    g_clk = g_clk:view(N, nm, ps, ps)
+  else
+    g_clk = g_var
+    g_clk = g_clk:view(N, nm, ps, ps)
+    -- g_sigma = torch.cmul(g_clk, g_clk_T)
   end
+  -- g_sigma = g_sigma:view(N, nm, ps, ps)
+  -- weights coeffs is taken care of at final loss, for computation efficiency and stability
+  local g_w_input = input:narrow(2,p*nm*ps+1, nm):clone()
+  local g_w = torch.exp(g_w_input:view(-1, nm))
+  g_w = g_w:cdiv(torch.repeatTensor(torch.sum(g_w,2),1,nm))
+  --print(g_w)
 
-  -- return the samples and their log likelihoods
-  return seq, seqLogprobs
+  local pixels = torch.Tensor(N, ps):type(input:type())
+  local train_pixels = gt_pixel:float()
+  local losses = 0
+  local train_losses = 0
+  local g_clk_x, g_w_x, g_mean_x
+  if input:type() == 'torch.CudaTensor' then
+    g_clk_x = g_clk:float()
+    g_w_x = g_w:float()
+    g_mean_x = g_mean:float()
+  else
+    g_clk_x = g_clk
+    g_w_x = g_w
+    g_mean_x = g_mean
+  end
+  -- sampling process
+  for b=1,N do
+    -- print('------------------------------------------')
+    -- sample from the multinomial
+    local mix_idx = torch.multinomial(g_w[b], 1)[1]
+    --print(mix_idx)
+    --local max_prob, mix_idx
+    --max_prob, mix_idx = torch.max(g_w[b], 1)
+    --mix_idx = mix_idx[1]
+    --print(mix_idx)
+    -- sample from the mvn gaussians
+    -- print(g_mean[{b, mix_idx, {}}])
+    -- print(g_clk[{b, mix_idx, {}, {}}])
+    local p = mvn.rnd(g_mean[{b, mix_idx, {}}], g_clk[{b, mix_idx, {},{}}])
+    -- p = g_mean[{b, mix_idx[1], {}}]
+    pixels[b] = p
+    -- evaluate the loss
+    local g_rpb_ = torch.Tensor(nm):zero()
+    local pf = p:float()
+    --print(pf)
+    for g=1,nm do -- iterate over mixtures
+      g_rpb_[g] = mvn.pdf(pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
+    end
+    local pdf = torch.sum(g_rpb_)
+    losses = losses - torch.log(pdf)
+    -- VALIDATION
+    local train_g_rpb_ = torch.Tensor(nm):zero()
+    local train_pf = train_pixels[b]
+    --print(val_pf)
+    for g=1,nm do -- iterate over mixtures
+      train_g_rpb_[g] = mvn.pdf(train_pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
+    end
+    local train_pdf = torch.sum(train_g_rpb_)
+    train_losses = train_losses - torch.log(train_pdf)
+  end
+  losses = losses / N
+  train_losses = train_losses / N
+  return pixels, losses, train_losses
 end
-
-
-
 -------------------------------------------------------------------------------
 -- Pixel Model Mixture of Gaussian Density Criterion
 -------------------------------------------------------------------------------
@@ -464,7 +379,11 @@ function crit:updateOutput(input, target)
     g_clk = g_clk:view(N, nm, ps, ps)
     g_clk_T = g_clk_T:view(N, nm, ps, ps)
   else
-    g_sigma = torch.cmul(g_var_input, g_var_input)
+    g_clk = g_var
+    g_clk = g_clk:view(N, nm, ps, ps)
+    g_clk_T = g_var
+    g_clk_T = g_clk_T:view(N, nm, ps, ps)
+    g_sigma = torch.cmul(g_clk, g_clk_T)
   end
   g_sigma = g_sigma:view(N, nm, ps, ps)
   -- weights coeffs is taken care of at final loss, for computation efficiency and stability
@@ -499,7 +418,7 @@ function crit:updateOutput(input, target)
     -- Start of CPU. this is the only place that should take place in CPU
     local target_pixel_ = target_x[b]:narrow(1,1,ps)
     -- can we vectorize this? Now constrains by the MVN.PDF
-    local g_rpb_ = torch.zeros(nm)
+    local g_rpb_ = torch.Tensor(nm):zero()
     local g_sigma_inv_ = torch.Tensor(g_sigma[b]:size())
     for g=1,nm do -- iterate over mixtures
       g_rpb_[g] = mvn.pdf(target_pixel_, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
@@ -557,7 +476,7 @@ function crit:updateOutput(input, target)
     grad_g_cov[{{}, 3}] = grad_g_clk[{{},3,2}]
     grad_g_cov = grad_g_cov:view(N, -1)
   else
-    grad_g_var = torch.cmul(g_var_input, grad_g_sigma):mul(2)
+    grad_g_var = torch.cmul(g_var, grad_g_sigma):mul(2)
     grad_g_var = self.var_exp:backward(g_var_input, grad_g_var)
     grad_g_var = grad_g_var:view(N, -1)
   end

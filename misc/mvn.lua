@@ -1,5 +1,6 @@
 require('math')
 
+-- all of the functions only process one input.
 local mvn = {}
 
 -- cholesky is lower down decomposition of Sigma
@@ -22,6 +23,18 @@ end
 
 function mvn.logunit(x)
   return -.5 * x*x - 0.5 * math.log(2*math.pi)
+end
+
+function mvn.rnd(mu, cholesky)
+  -- L*X + mu
+  local n = mu:nElement()
+  local x = torch.Tensor(n):type(mu:type())
+  for i=1,n do
+    x[i] = torch.normal(0,1)
+  end
+  local y = mu:clone()
+  y:addmv(cholesky, x)
+  return y
 end
 
 return mvn

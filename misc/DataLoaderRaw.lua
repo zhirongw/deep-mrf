@@ -42,11 +42,14 @@ function DataLoaderRaw:__init(opt)
   -- how about working on the first texture? D1.png
   self.iterator = 1
   self.images = {}
-  local img = image.load(self.files[self.iterator], 3, 'float')
+  print('training on image: '..self.files[self.iterator])
+  if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end
+
+  local img = image.load(self.files[self.iterator], self.nChannels, 'float')
   img = image.scale(img, opt.img_size, opt.img_size)
+  img = img:resize(self.nChannels, opt.img_size, opt.img_size)
   -- print(img[{{},1,1}])
   self.images[self.iterator] = img
-  self.nChannels = img:size(1)
   self.nHeight = img:size(2)
   self.nWidth = img:size(3)
 end

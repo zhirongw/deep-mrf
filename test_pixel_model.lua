@@ -95,7 +95,7 @@ local function gradCheckPM()
 
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 3
+  opt.pixel_size = 1
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -144,7 +144,7 @@ end
 local function gradCheckCrit()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 3
+  opt.pixel_size = 1
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -188,7 +188,7 @@ end
 local function gradCheck()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 3
+  opt.pixel_size = 1
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -271,7 +271,6 @@ local function overfit()
   for t=1,5000 do
     loss = lossFun()
     -- test that initial loss makes sense
-    if t == 1 then tester:assertlt(math.abs(math.log(opt.pixel_size+1) - loss), 0.1) end
     grad_cache:addcmul(1, grad_params, grad_params)
     params:addcdiv(-1e-3, grad_params, torch.sqrt(grad_cache)) -- adagrad update
     print(string.format('iteration %d/5000: loss %f', t, loss))
@@ -280,34 +279,6 @@ local function overfit()
 
   tester:assertlt(loss, 0.2)
 end
-
--- check that we can call :sample() and that correct-looking things happen
-local function sample()
-  local dtype = 'torch.DoubleTensor'
-  local opt = {}
-  opt.pixel_size = 3
-  opt.num_mixtures = 2
-  opt.recurrent_stride = 3
-  opt.rnn_size = 8
-  opt.num_layers = 2
-  opt.dropout = 0
-  opt.seq_length = 7
-  opt.batch_size = 2
-  opt.mult_in = true
-  local pm = nn.PixelModel(opt)
-  pm:type(dtype)
-
-  local imgs = torch.randn(opt.batch_size, opt.input_encoding_size):type(dtype)
-  local seq = pm:sample(imgs)
-
-  tester:assertTensorSizeEq(seq, {opt.seq_length, opt.batch_size})
-  tester:asserteq(seq:type(), 'torch.LongTensor')
-  tester:assertge(torch.min(seq), 1)
-  tester:assertle(torch.max(seq), opt.pixel_size+1)
-  print('\nsampled sequence:')
-  print(seq)
-end
-
 
 --[[
 -- check that we can call :sample_beam() and that correct-looking things happen
