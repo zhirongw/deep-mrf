@@ -191,7 +191,7 @@ function layer:updateGradInput(input, gradOutput)
   return self.gradInput
 end
 
-function layer:sample(input, gt_pixel)
+function layer:sample(input, gt_pixels)
   local N, G = input:size(1), input:size(2)
   local ps = self.pixel_size
   local nm = self.num_mixtures
@@ -229,9 +229,7 @@ function layer:sample(input, gt_pixel)
   else
     g_clk = g_var
     g_clk = g_clk:view(N, nm, ps, ps)
-    -- g_sigma = torch.cmul(g_clk, g_clk_T)
   end
-  -- g_sigma = g_sigma:view(N, nm, ps, ps)
   -- weights coeffs is taken care of at final loss, for computation efficiency and stability
   local g_w_input = input:narrow(2,p*nm*ps+1, nm):clone()
   local g_w = torch.exp(g_w_input:view(-1, nm))
@@ -239,7 +237,7 @@ function layer:sample(input, gt_pixel)
   -- print(g_w)
 
   local pixels = torch.Tensor(N, ps):type(input:type())
-  local train_pixels = gt_pixel:float()
+  local train_pixels = gt_pixels:float()
   local losses = 0
   local train_losses = 0
   local g_clk_x, g_w_x, g_mean_x
@@ -253,10 +251,10 @@ function layer:sample(input, gt_pixel)
     g_mean_x = g_mean
   end
   -- sampling process
+  local mix_idx = torch.multinomial(g_w, 1)
   for b=1,N do
     -- print('------------------------------------------')
     -- sample from the multinomial
-    local mix_idx = torch.multinomial(g_w[b], 1)[1]
     --print(mix_idx)
     --local max_prob, mix_idx
     --max_prob, mix_idx = torch.max(g_w[b], 1)
@@ -265,28 +263,47 @@ function layer:sample(input, gt_pixel)
     -- sample from the mvn gaussians
     -- print(g_mean[{b, mix_idx, {}}])
     -- print(g_clk[{b, mix_idx, {}, {}}])
-    local p = mvn.rnd(g_mean[{b, mix_idx, {}}], g_clk[{b, mix_idx, {},{}}])
+    local p = mvn.rnd(g_mean[{b, mix_idx[{b,1}], {}}], g_clk[{b, mix_idx[{b,1}], {},{}}])
     -- p = g_mean[{b, mix_idx, {}}]
     pixels[b] = p
-    -- evaluate the loss
-    local g_rpb_ = torch.Tensor(nm):zero()
-    local pf = p:float()
-    --print(pf)
-    for g=1,nm do -- iterate over mixtures
-      g_rpb_[g] = mvn.pdf(pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
+    if ps == 3 then
+      -- evaluate the loss
+      local g_rpb_ = torch.Tensor(nm):zero()
+      local pf = p:float()
+      --print(pf)
+      for g=1,nm do -- iterate over mixtures
+        g_rpb_[g] = mvn.pdf(pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
+      end
+      local pdf = torch.sum(g_rpb_)
+      losses = losses - torch.log(pdf)
+      -- VALIDATION
+      local train_g_rpb_ = torch.Tensor(nm):zero()
+      local train_pf = train_pixels[b]
+      --print(val_pf)
+      for g=1,nm do -- iterate over mixtures
+        train_g_rpb_[g] = mvn.pdf(train_pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
+      end
+      local train_pdf = torch.sum(train_g_rpb_)
+      train_losses = train_losses - torch.log(train_pdf)
     end
-    local pdf = torch.sum(g_rpb_)
-    losses = losses - torch.log(pdf)
-    -- VALIDATION
-    local train_g_rpb_ = torch.Tensor(nm):zero()
-    local train_pf = train_pixels[b]
-    --print(val_pf)
-    for g=1,nm do -- iterate over mixtures
-      train_g_rpb_[g] = mvn.pdf(train_pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
-    end
-    local train_pdf = torch.sum(train_g_rpb_)
-    train_losses = train_losses - torch.log(train_pdf)
   end
+
+  -- evaluate the loss
+  if ps == 1 then
+    -- for synthesis pixels
+    local g_mean_diff = torch.repeatTensor(pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
+    local g_rpb = mvn.bnormpdf(g_mean_diff, g_clk)
+    g_rpb = g_rpb:cmul(g_w)
+    local pdf = torch.sum(g_rpb, 2)
+    losses = - torch.sum(torch.log(pdf))
+    -- for training pixels
+    g_mean_diff = torch.repeatTensor(gt_pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
+    g_rpb = mvn.bnormpdf(g_mean_diff, g_clk)
+    g_rpb = g_rpb:cmul(g_w)
+    pdf = torch.sum(g_rpb, 2)
+    train_losses = - torch.sum(torch.log(pdf))
+  end
+
   losses = losses / N
   train_losses = train_losses / N
   return pixels, losses, train_losses
@@ -336,12 +353,21 @@ function crit:updateOutput(input, target)
   assert(ps == self.pixel_size, 'input dimensions of pixel do not match')
   local nm = self.num_mixtures
 
+  local input_x, target_x
+  if ps == 3 and input:type() == 'torch.CudaTensor' then
+    input_x = input:float()
+    target_x = target:float()
+  else
+    input_x = input
+    target_x = target
+  end
   -- decode the gmms first
   -- mean undertake no changes
-  local g_mean_input = input:narrow(3,1,nm*ps):clone()
+  local g_mean_input = input_x:narrow(3,1,nm*ps):clone()
   local g_mean = g_mean_input:view(D, N, nm, ps)
+  local g_mean_diff = torch.repeatTensor(target_x:view(D, N, 1, ps), 1,1,nm,1):add(-1, g_mean)
   -- we use 6 numbers to denote the cholesky depositions
-  local g_var_input = input:narrow(3, nm*ps+1, nm*ps):clone()
+  local g_var_input = input_x:narrow(3, nm*ps+1, nm*ps):clone()
   g_var_input = g_var_input:view(-1, ps)
   local g_var = self.var_exp:forward(g_var_input)
 
@@ -351,7 +377,7 @@ function crit:updateOutput(input, target)
   local g_sigma
   p = 2
   if ps == 3 then
-    g_cov_input = input:narrow(3, p*nm*ps+1, nm*ps):clone()
+    g_cov_input = input_x:narrow(3, p*nm*ps+1, nm*ps):clone()
     g_cov_input = g_cov_input:view(-1, 3)
     p = p + 1
     g_clk = torch.Tensor(D*N*nm, 3, 3):fill(0):type(g_var_input:type())
@@ -379,8 +405,9 @@ function crit:updateOutput(input, target)
     g_sigma = torch.cmul(g_clk, g_clk_T)
   end
   g_sigma = g_sigma:view(D, N, nm, ps, ps)
+  local g_sigma_inv = torch.Tensor(g_sigma:size()):type(g_sigma:type())
   -- weights coeffs is taken care of at final loss, for computation efficiency and stability
-  local g_w_input = input:narrow(3,p*nm*ps+1, nm):clone()
+  local g_w_input = input_x:narrow(3,p*nm*ps+1, nm):clone()
   local g_w = self.w_softmax:forward(g_w_input:view(-1, nm))
   g_w = g_w:view(D, N, nm)
 
@@ -390,58 +417,45 @@ function crit:updateOutput(input, target)
   local grad_g_sigma = torch.Tensor(g_sigma:size()):type(g_sigma:type())
   local grad_g_w = torch.Tensor(g_w:size()):type(g_w:type())
 
-  local target_x, g_mean_x, g_clk_x, g_w_x, g_sigma_x
-  -- some part of the computation can only happen on CPU, cache those variables
-  if input:type() == 'torch.CudaTensor' then
-    g_sigma_x = g_sigma:float()
-    g_clk_x = g_clk:float()
-    g_w_x = g_w:float()
-    g_mean_x = g_mean:float()
-    target_x = target:float()
+  if ps == 1 then
+    local g_rpb = mvn.bnormpdf(g_mean_diff, g_clk)
+    g_rpb = g_rpb:cmul(g_w)
+    local pdf = torch.sum(g_rpb, 3)
+    loss1 = - torch.sum(torch.log(pdf))
+    g_sigma_inv:fill(1):cdiv(g_sigma)
+    grad_g_w = - torch.cdiv(g_rpb, torch.repeatTensor(pdf,1,1,nm,1))
   else
-    g_sigma_x = g_sigma
-    g_clk_x = g_clk
-    g_w_x = g_w
-    g_mean_x = g_mean
-    target_x = target
-  end
+    -- for color pixels, we have to calculate the inverse one at a time. FIX THIS?
+    for t=1,D do -- iterate over timestep
+      for b=1,N do -- iterate over batches
+        -- can we vectorize this? Now constrains by the MVN.PDF
+        local g_rpb_ = torch.Tensor(nm):zero()
+        for g=1,nm do -- iterate over mixtures
+          g_rpb_[g] = mvn.pdf(g_mean_diff[{t,b,g,{}}], g_clk[{t,b,g,{},{}}]) * g_w[{t,b,g}]
+          g_sigma_inv[{t,b,g,{},{}}] = torch.inverse(g_sigma[{t,b,g,{},{}}])
+        end
+        local pdf = torch.sum(g_rpb_)
+        loss1 = loss1 - torch.log(pdf)
 
-  for t=1,D do -- iterate over timestep
-    for b=1,N do -- iterate over batches
-      -- Start of CPU. this is the only place that should take place in CPU
-      local target_pixel_ = target_x[{t,b}]:narrow(1,1,ps)
-      -- can we vectorize this? Now constrains by the MVN.PDF
-      local g_rpb_ = torch.Tensor(nm):zero()
-      local g_sigma_inv_ = torch.Tensor(g_sigma[{t,b}]:size())
-      for g=1,nm do -- iterate over mixtures
-        g_rpb_[g] = mvn.pdf(target_pixel_, g_mean_x[{t,b,g,{}}], g_clk_x[{t,b,g,{},{}}]) * g_w_x[{t,b,g}]
-        g_sigma_inv_[g] = torch.inverse(g_sigma_x[{t,b,g,{},{}}])
+        -- normalize the responsibilities for backprop
+        g_rpb_:div(pdf)
+
+        -- gradient of weight is tricky, making it efficient together with softmax
+        grad_g_w[{t,b, {}}] = - g_rpb_
       end
-      local pdf = torch.sum(g_rpb_)
-      loss1 = loss1 - torch.log(pdf)
-      if input:type() == 'torch.CudaTensor' then
-        g_rpb_ = g_rpb_:cuda()
-        g_sigma_inv_ = g_sigma_inv_:cuda()
-      end
-      -- End of CPU
-
-      -- normalize the responsibilities for backprop
-      g_rpb_:div(pdf)
-
-      -- gradient of weight is tricky, making it efficient together with softmax
-      grad_g_w[{t,b, {}}] = - g_rpb_
-      -- gradient of mean
-      local g_mean_diff_ = torch.add(torch.repeatTensor(target[{t,b}]:narrow(1,1,ps),nm,1), -1, g_mean[{t,b}])
-      local mean_left_ = g_mean_diff_:view(nm, ps, 1)
-      local mean_right_ = g_mean_diff_:view(nm, 1, ps)
-      g_rpb_ = torch.repeatTensor(g_rpb_:view(-1,1), 1, ps)
-      grad_g_mean[{t,b, {}, {}}] = - torch.cmul(g_rpb_, torch.bmm(g_sigma_inv_, mean_left_))
-      -- gradient of covariance matrix
-      g_rpb_ = torch.repeatTensor(g_rpb_:view(-1,ps,1), 1, 1, ps)
-      local g_temp_ = torch.bmm(torch.bmm(g_sigma_inv_, torch.bmm(mean_left_, mean_right_)), g_sigma_inv_) - g_sigma_inv_
-      grad_g_sigma[{t,b, {}, {}, {}}] = - torch.cmul(g_rpb_, g_temp_) * 0.5
     end
   end
+
+  local mean_left = g_mean_diff:view(-1, ps, 1)
+  local mean_right = g_mean_diff:view(-1, 1, ps)
+  g_sigma_inv = g_sigma_inv:view(-1, ps, ps)
+  local g_rpb = torch.repeatTensor(grad_g_w:view(-1,1),1,ps)
+  -- gradient for mean
+  grad_g_mean = torch.cmul(g_rpb, torch.bmm(g_sigma_inv, mean_left))
+  -- gradient for sigma
+  local g_temp = torch.bmm(torch.bmm(g_sigma_inv, torch.bmm(mean_left, mean_right)), g_sigma_inv) - g_sigma_inv
+  g_rpb = torch.repeatTensor(g_rpb:view(-1,ps,1),1,1,ps)
+  grad_g_sigma = torch.cmul(g_rpb, g_temp):mul(0.5)
 
   -- back prop encodings
   -- mean undertake no changes
@@ -479,7 +493,6 @@ function crit:updateOutput(input, target)
   grad_g_var:div(D*N)
   if ps == 3 then grad_g_cov:div(D*N) end
   grad_g_w:div(D*N)
-  -- grad_borders:div(D*N)
 
   -- concat to gradInput
   if self.pixel_size == 3 then
@@ -487,6 +500,9 @@ function crit:updateOutput(input, target)
     self.gradInput = torch.cat(torch.cat(grad_g_mean, grad_g_var), torch.cat(grad_g_cov, grad_g_w))
   else
     self.gradInput = torch.cat(torch.cat(grad_g_mean, grad_g_var), grad_g_w)
+  end
+  if input:type() == 'torch.CudaTensor' and ps == 3 then
+    self.gradInput = self.gradInput:cuda()
   end
   -- return the loss
   self.output = (loss1) / (D*N)

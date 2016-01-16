@@ -188,8 +188,8 @@ end
 local function gradCheck()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 1
-  opt.num_mixtures = 2
+  opt.pixel_size = 3
+  opt.num_mixtures = 5
   opt.recurrent_stride = 3
   opt.rnn_size = 8
   opt.num_layers = 2

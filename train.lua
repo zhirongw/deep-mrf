@@ -29,26 +29,26 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 -- Model settings
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
-cmd:option('-num_mixtures',5,'number of gaussian mixtures to encode the output pixel')
-cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
+cmd:option('-patch_size',25,'size of the neighbor patch that a pixel is conditioned on')
 
 -- Optimization: General
-cmd:option('-max_iters', 3000, 'max number of iterations to run for (-1 = run forever)')
+cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',32,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
-cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel RNN')
+cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 -- Optimization: for the Pixel Model
-cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',4e-3,'learning rate')
+cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 100, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-learning_rate_decay_every', 500, 'every how many iterations thereafter to drop LR by half?')
 cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 50, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 1000, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
@@ -85,7 +85,7 @@ local loader = DataLoaderRaw{folder_path = opt.folder_path,
 -- Initialize the networks
 -------------------------------------------------------------------------------
 local protos = {}
-
+local iter = 0
 if string.len(opt.start_from) > 0 then
   -- load protos from file
   print('initializing weights from ' .. opt.start_from)
@@ -93,7 +93,8 @@ if string.len(opt.start_from) > 0 then
   protos = loaded_checkpoint.protos
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
-  protos.crit = nn.PixelModelCriterion() -- not in checkpoints, create manually
+  protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures) -- not in checkpoints, create manually
+  iter = loaded_checkpoint.iter
 else
   -- create protos from scratch
   -- intialize pixel model
@@ -115,6 +116,8 @@ end
 -- ship everything to GPU, maybe
 if opt.gpuid >= 0 then
   for k,v in pairs(protos) do v:cuda() end
+  -- criterion for color image run on CPU.
+  if ps == 3 then protos.crit:float() end
 end
 
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
@@ -196,7 +199,6 @@ end
 -------------------------------------------------------------------------------
 -- Loss function
 -------------------------------------------------------------------------------
-local iter = 0
 local function lossFun()
   protos.pm:training()
   grad_params:zero()
@@ -205,10 +207,12 @@ local function lossFun()
   -- Forward pass
   -----------------------------------------------------------------------------
   -- get batch of data
+  --local timer = torch.Timer()
   local data = loader:getBatch{batch_size = opt.batch_size, patch_size = opt.patch_size, gpu = opt.gpuid, split = 'train'}
 
   -- forward the pixel model
   local gmms = protos.pm:forward(data.pixels)
+  --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
   local loss = protos.crit:forward(gmms, data.targets)
 
@@ -217,8 +221,10 @@ local function lossFun()
   -----------------------------------------------------------------------------
   -- backprop criterion
   local dgmms = protos.crit:backward(gmms, data.targets)
+  --print('Criterion time: ' .. timer:time().real .. ' seconds')
   -- backprop pixel model
   local dpixels = protos.pm:backward(data.pixels, dgmms)
+  --print('Backward time: ' .. timer:time().real .. ' seconds')
 
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
@@ -241,10 +247,18 @@ local best_score
 while true do
   iter = iter + 1
 
+  -- decay the learning rate
+  local learning_rate = opt.learning_rate
+  if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then
+    local frac = (iter - opt.learning_rate_decay_start) / opt.learning_rate_decay_every
+    local decay_factor = math.pow(0.5, frac)
+    learning_rate = learning_rate * decay_factor -- set the decayed rate
+  end
+
   -- eval loss/gradient
   local losses = lossFun()
   if iter % opt.losses_log_every == 0 then loss_history[iter] = losses.total_loss end
-  print(string.format('iter %d: %f', iter, losses.total_loss))
+  print(string.format('iter %d: %f. LR: %f', iter, losses.total_loss, learning_rate))
 
   -- save checkpoint once in a while (or on final iteration)
   if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
@@ -272,14 +286,6 @@ while true do
 
     -- utils.write_json(checkpoint_path .. '.json', checkpoint)
     -- print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
-  end
-
-  -- decay the learning rate
-  local learning_rate = opt.learning_rate
-  if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then
-    local frac = (iter - opt.learning_rate_decay_start) / opt.learning_rate_decay_every
-    local decay_factor = math.pow(0.5, frac)
-    learning_rate = learning_rate * decay_factor -- set the decayed rate
   end
 
   -- perform a parameter update

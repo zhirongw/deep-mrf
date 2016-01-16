@@ -103,6 +103,7 @@ for h=1,pm.recurrent_stride do
     else
       local train_pixel = img[{{}, {}, h, w}]
       pixel, loss, train_loss = pm:sample(gmms, train_pixel)
+      pixel = train_pixel
       images[(h-1)*pm.recurrent_stride+w] = pixel
       loss_sum = loss_sum + loss
       train_loss_sum = train_loss_sum + train_loss
