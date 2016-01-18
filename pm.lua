@@ -25,6 +25,7 @@ function layer:__init(opt)
   self.recurrent_stride = utils.getopt(opt, 'recurrent_stride')
   self.seq_length = utils.getopt(opt, 'seq_length')
   self.mult_in = utils.getopt(opt, 'mult_in')
+  self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   if self.pixel_size == 3 then
     self.output_size = self.num_mixtures * (3+3+3+1)
   else
@@ -32,7 +33,7 @@ function layer:__init(opt)
   end
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
-  self.core = LSTM.lstm2d(self.pixel_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
+  self.core = LSTM.lstm2d(self.pixel_size*self.num_neighbors, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
 
@@ -118,12 +119,15 @@ function layer:updateOutput(input)
   -- self._gmm_encodings = {}
   -- loop through each timestep
   for t=1,self.seq_length do
+    local h = math.floor((t-1) / self.recurrent_stride + 1)
+    local w = (t-1) % self.recurrent_stride + 1
+    local t_w = t - 1
+    if w == 1 then t_w = 0 end
+    local t_h = t - self.recurrent_stride
+    if h == 1 then t_h = 0 end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
-    self._inputs[t] = {input[t],unpack(self._states[t-1])}
-    local t_stride = t - self.recurrent_stride
-    if t_stride < 1 then t_stride = 0 end
-    -- insert the states[t-1,t]
-    for i,v in ipairs(self._states[t_stride]) do table.insert(self._inputs[t], v) end
+    self._inputs[t] = {input[t],unpack(self._states[t_w])}
+    for i,v in ipairs(self._states[t_h]) do table.insert(self._inputs[t], v) end
     -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
     local lsts = self.clones[t]:forward(self._inputs[t])
     -- save the state
@@ -151,9 +155,17 @@ function layer:updateGradInput(input, gradOutput)
 
   -- initialize the gradient of states all to zeros.
   -- this works when init_state is all zeros
-  local _dstates = {[self.seq_length] = self.init_state}
+  local _dstates = {}
   for t=self.seq_length,1,-1 do
+    local h = math.floor((t-1) / self.recurrent_stride + 1)
+    local w = (t-1) % self.recurrent_stride + 1
+    local t_w = t - 1
+    if w == 1 then t_w = 0 end
+    local t_h = t - self.recurrent_stride
+    if h == 1 then t_h = 0 end
+
     -- concat state gradients and output vector gradients at time step t
+    if _dstates[t] == nil then _dstates[t] = self.init_state end
     local douts = {}
     for k=1,#_dstates[t] do table.insert(douts, _dstates[t][k]) end
     table.insert(douts, gradOutput[t])
@@ -163,21 +175,22 @@ function layer:updateGradInput(input, gradOutput)
     -- split the gradient to pixel and to state
     self.gradInput[t] = dinputs[1] -- first element is the input pixel vector
     -- copy to _dstates[t,t-1]
-    if _dstates[t-1] == nil then
-      _dstates[t-1] = {}
-      for k=2,self.num_state+1 do table.insert(_dstates[t-1], dinputs[k]) end
-    else
-      for k=2,self.num_state+1 do _dstates[t-1][k-1]:add(dinputs[k]) end
+    if t_w > 0 then
+      if _dstates[t_w] == nil then
+        _dstates[t_w] = {}
+        for k=2,self.num_state+1 do table.insert(_dstates[t_w], dinputs[k]) end
+      else
+        for k=2,self.num_state+1 do _dstates[t_w][k-1]:add(dinputs[k]) end
+      end
     end
     -- copy to _dstates[t-1, t]
-    local t_stride = t - self.recurrent_stride
-    if t_stride > 0 then
-      if _dstates[t_stride] == nil then
-        _dstates[t_stride] = {}
-        for k=self.num_state+2,2*self.num_state+1 do table.insert(_dstates[t_stride], dinputs[k]) end
+    if t_h > 0 then
+      if _dstates[t_h] == nil then
+        _dstates[t_h] = {}
+        for k=self.num_state+2,2*self.num_state+1 do table.insert(_dstates[t_h], dinputs[k]) end
       else
         -- this is unnecessary, just keep it for cleanness
-        for k=self.num_state+2,2*self.num_state+1 do _dstates[t_stride][k-self.num_state-1]:add(dinputs[k]) end
+        for k=self.num_state+2,2*self.num_state+1 do _dstates[t_h][k-self.num_state-1]:add(dinputs[k]) end
       end
     end
   end

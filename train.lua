@@ -31,6 +31,7 @@ cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each la
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-num_neighbors',2,'number of neighbors for each pixel')
 
 -- Optimization: General
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
@@ -48,7 +49,7 @@ cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 1000, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 100, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
@@ -106,8 +107,9 @@ else
   pmOpt.dropout = opt.drop_prob_pm
   pmOpt.batch_size = opt.batch_size
   pmOpt.recurrent_stride = opt.patch_size
-  pmOpt.seq_length = opt.patch_size * opt.patch_size - 1
+  pmOpt.seq_length = opt.patch_size * opt.patch_size
   pmOpt.mult_in = opt.mult_in
+  pmOpt.num_neighbors = opt.num_neighbors
   protos.pm = nn.PixelModel(pmOpt)
   -- criterion for the pixel model
   protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures)
@@ -121,6 +123,7 @@ if opt.gpuid >= 0 then
 end
 
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
+print('Number of pixels in the neighbor: ', opt.num_neighbors)
 print('Hidden nodes in each layer: ', opt.rnn_size)
 print('Number of mixtures for output gaussians: ', opt.num_mixtures)
 print('The input image local patch size: ', opt.patch_size)
@@ -156,10 +159,11 @@ local function eval_split(n)
   while i < n do
 
     -- fetch a batch of data
-    local data = loader:getBatch{batch_size = opt.batch_size, patch_size = opt.patch_size, gpu = opt.gpuid, split = 'val'}
+    local data = loader:getBatch{batch_size = 2, num_neighbors = opt.num_neighbors, patch_size = opt.patch_size, gpu = opt.gpuid, split = 'val'}
 
     -- forward the model to get loss
     local gmms = protos.pm:forward(data.pixels)
+    --print(gmms)
     local loss = protos.crit:forward(gmms, data.targets)
     loss_sum = loss_sum + loss
 
@@ -182,7 +186,7 @@ local function lossFun()
   -----------------------------------------------------------------------------
   -- get batch of data
   --local timer = torch.Timer()
-  local data = loader:getBatch{batch_size = opt.batch_size, patch_size = opt.patch_size, gpu = opt.gpuid, split = 'train'}
+  local data = loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors, patch_size = opt.patch_size, gpu = opt.gpuid, split = 'train'}
 
   -- forward the pixel model
   local gmms = protos.pm:forward(data.pixels)

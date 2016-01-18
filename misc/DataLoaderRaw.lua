@@ -76,26 +76,38 @@ function DataLoaderRaw:getBatch(opt)
   -- load an image
   local img = self.images[self.iterator]
 
-  local patches = torch.FloatTensor(batch_size, self.nChannels, patch_size, patch_size)
+  -- two potential schems
+  local patches = torch.zeros(batch_size, self.nChannels, patch_size+1, patch_size+1)
+  --local patches = torch.rand(batch_size, self.nChannels, patch_size+1, patch_size+1)
 
   --local infos = {}
   for i=1,batch_size do
     local h = torch.random(1, self.nHeight-patch_size+1)
     local w = torch.random(1, self.nWidth-patch_size+1)
 
-    patches[i] = img[{{}, {h, h+patch_size-1}, {w, w+patch_size-1}}]
-
+    patches[{i,{},{2,patch_size+1},{2,patch_size+1}}] = img[{{}, {h, h+patch_size-1}, {w, w+patch_size-1}}]
     -- and record associated info as well
     -- local info_struct = {}
     -- info_struct.id = self.ids[ri]
     -- info_struct.file_path = self.files[ri]
     -- table.insert(infos, info_struct)
   end
-  patches = patches:view(batch_size, self.nChannels, -1)
-  patches = patches:permute(3, 1, 2)
+  -- prepare the targets
+  local targets = patches[{{},{},{2,patch_size+1},{2,patch_size+1}}]:clone()
+  targets = targets:view(batch_size, self.nChannels, -1)
+  targets = targets:permute(3, 1, 2)
+  -- prepare the inputs. -n1, left, n2, up.
+  local n1 = patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()
+  n1 = n1:view(batch_size, self.nChannels, -1)
+  n1 = n1:permute(3, 1, 2)
+  local n2 = patches[{{},{},{1,patch_size},{2,patch_size+1}}]:clone()
+  n2 = n2:view(batch_size, self.nChannels, -1)
+  n2 = n2:permute(3, 1, 2)
+  local inputs = torch.cat(n1, n2, 3)
+
   local data = {}
-  data.pixels = patches[{{1,seq_length},{},{}}]
-  data.targets = patches[{{2,seq_length+1},{},{}}]
+  data.pixels = inputs
+  data.targets = targets
   if opt.gpu >= 0 then
     data.pixels = data.pixels:cuda()
     data.targets = data.targets:cuda()

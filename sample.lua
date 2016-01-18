@@ -64,7 +64,7 @@ if opt.batch_size == 0 then batch_size = checkpoint.opt.batch_size end
 -- change it to evaluation mode
 local protos = checkpoint.protos
 local patch_size = checkpoint.opt['patch_size']
-protos.pm.recurrent_stride = patch_size + opt.img_size - 1
+protos.pm.recurrent_stride = patch_size + opt.img_size
 protos.pm.seq_length = protos.pm.recurrent_stride * protos.pm.recurrent_stride
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
@@ -82,7 +82,7 @@ for L = 1,checkpoint.opt.num_layers do
 end
 
 local states = {[0] = init_state}
-local images = torch.Tensor(pm.seq_length, batch_size, pm.pixel_size):cuda()
+local images = torch.Tensor(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride):cuda()
 ------------------ debug ------------------------
 local img = image.load('imgs/D1.png', pm.pixel_size, 'float')
 img = image.scale(img, 256, 256):resize(1, pm.pixel_size, 256, 256)
@@ -98,28 +98,21 @@ local gmms
 -- loop through each timestep
 for h=1,pm.recurrent_stride do
   for w=1,pm.recurrent_stride do
-    --if w < patch_size or h < patch_size then
-    if w < patch_size and h < patch_size then
-      pixel = img[{{}, {}, h, w}]
-      images[(h-1)*pm.recurrent_stride+w] = pixel
+    local pixel_left, pixel_up
+    if w == 1 then
+      pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
     else
-      local train_pixel = img[{{}, {}, h, w}]:clone()
-      pixel, loss, train_loss = pm:sample(gmms, train_pixel)
-      -- pixel = train_pixel
-      images[(h-1)*pm.recurrent_stride+w] = pixel
-      loss_sum = loss_sum + loss
-      train_loss_sum = train_loss_sum + train_loss
-      print((h-1)*pm.recurrent_stride+w .. '.....' .. train_loss .. '.....' .. loss)
+      pixel_left = images[{{}, {}, h, w-1}]
+    end
+    if h == 1 then
+      pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+    else
+      pixel_up = images[{{}, {}, h-1,w}]
     end
 
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
     -- Need to fix this for the new model
-    local inputs = {}
-    if w == 1 and h > 1 then
-      inputs = {pixel, unpack(states[pm.recurrent_stride])}
-    else
-      inputs = {pixel, unpack(states[w-1])}
-    end
+    local inputs = {torch.cat(pixel_left, pixel_up, 2), unpack(states[w-1])}
     local prev_w = w
     if states[w] == nil then prev_w = 0 end
     -- insert the states[t-1,t]
@@ -132,14 +125,25 @@ for h=1,pm.recurrent_stride do
     for i=1,pm.num_state do table.insert(states[w], lsts[i]:clone()) end
     gmms = lsts[#lsts]
 
+
+    -- sampling
+    if w < patch_size and h < patch_size and false then
+      pixel = img[{{}, {}, h, w}]
+      images[{{},{},h,w}] = pixel
+    else
+      local train_pixel = img[{{}, {}, h, w}]:clone()
+      pixel, loss, train_loss = pm:sample(gmms, train_pixel)
+      pixel = train_pixel
+      images[{{},{},h,w}] = pixel
+      loss_sum = loss_sum + loss
+      train_loss_sum = train_loss_sum + train_loss
+    end
   end
   collectgarbage()
 end
 
 -- output the sampled images
 local images_cpu = images:float()
-images_cpu = images_cpu:permute(2,3,1):clone()
-images_cpu = images_cpu:view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
 --images_cpu = images_cpu[{{}, {}, {patch_size, pm.recurrent_stride},{patch_size, pm.recurrent_stride}}]
 images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
 for i=1,batch_size do
@@ -147,9 +151,9 @@ for i=1,batch_size do
   image.save(filename, images_cpu[{i,1,{},{}}])
 end
 
-loss_sum = loss_sum / (opt.img_size * opt.img_size)
-train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
---loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride - 1)
---train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride - 1)
+--loss_sum = loss_sum / (opt.img_size * opt.img_size)
+--train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
 print('testing loss: ', loss_sum)
 print('training loss: ', train_loss_sum)
