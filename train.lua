@@ -30,7 +30,7 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
-cmd:option('-patch_size',25,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 
 -- Optimization: General
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
@@ -148,52 +148,26 @@ collectgarbage() -- "yeah, sure why not"
 -------------------------------------------------------------------------------
 -- Validation evaluation
 -------------------------------------------------------------------------------
-local function eval_split(split, evalopt)
-  local verbose = utils.getopt(evalopt, 'verbose', true)
-  local val_images_use = utils.getopt(evalopt, 'val_images_use', true)
-
+local function eval_split(n)
   protos.pm:evaluate()
-  loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
-  local n = 0
+  --loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
   local loss_sum = 0
-  local loss_evals = 0
-  local predictions = {}
-  local vocab = loader:getVocab()
-  while true do
+  local i = 0
+  while i < n do
 
     -- fetch a batch of data
-    local data = loader:getBatch{batch_size = opt.batch_size, patch_size = opt.patch_size}
+    local data = loader:getBatch{batch_size = opt.batch_size, patch_size = opt.patch_size, gpu = opt.gpuid, split = 'val'}
 
     -- forward the model to get loss
     local gmms = protos.pm:forward(data.pixels)
     local loss = protos.crit:forward(gmms, data.targets)
     loss_sum = loss_sum + loss
-    loss_evals = loss_evals + 1
 
-    -- forward the model to also get generated samples for each image
-    local seq = protos.pm:sample(feats)
-    local sents = net_utils.decode_sequence(vocab, seq)
-    for k=1,#sents do
-      local entry = {image_id = data.infos[k].id, caption = sents[k]}
-      table.insert(predictions, entry)
-      if verbose then
-        print(string.format('image %s: %s', entry.image_id, entry.caption))
-      end
-    end
-
-    -- if we wrapped around the split or used up val imgs budget then bail
-    local ix0 = data.bounds.it_pos_now
-    local ix1 = math.min(data.bounds.it_max, val_images_use)
-    if verbose then
-      print(string.format('evaluating validation performance... %d/%d (%f)', ix0-1, ix1, loss))
-    end
-
-    if loss_evals % 10 == 0 then collectgarbage() end
-    if data.bounds.wrapped then break end -- the split ran out of data, lets break out
-    if n >= val_images_use then break end -- we've used enough images
+    i = i + 1
+    if i % 10 == 0 then collectgarbage() end
   end
 
-  return loss_sum/loss_evals, predictions
+  return loss_sum/n
 end
 
 -------------------------------------------------------------------------------
@@ -264,8 +238,8 @@ while true do
   if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
 
     -- evaluate the validation performance
-    -- local val_loss = eval_split('val', {val_images_use = opt.val_images_use})
-    -- print('validation loss: ', val_loss)
+    local val_loss = eval_split(1)
+    print('validation loss: ', val_loss)
     -- val_loss_history[iter] = val_loss
 
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id .. iter)

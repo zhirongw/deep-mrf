@@ -68,6 +68,7 @@ protos.pm.recurrent_stride = patch_size + opt.img_size - 1
 protos.pm.seq_length = protos.pm.recurrent_stride * protos.pm.recurrent_stride
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
+pm.core:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
 
 -- prepare the empty states
@@ -97,40 +98,40 @@ local gmms
 -- loop through each timestep
 for h=1,pm.recurrent_stride do
   for w=1,pm.recurrent_stride do
-    if w < patch_size or h < patch_size then
+    --if w < patch_size or h < patch_size then
+    if w < patch_size and h < patch_size then
       pixel = img[{{}, {}, h, w}]
       images[(h-1)*pm.recurrent_stride+w] = pixel
     else
-      local train_pixel = img[{{}, {}, h, w}]
+      local train_pixel = img[{{}, {}, h, w}]:clone()
       pixel, loss, train_loss = pm:sample(gmms, train_pixel)
-      pixel = train_pixel
+      -- pixel = train_pixel
       images[(h-1)*pm.recurrent_stride+w] = pixel
       loss_sum = loss_sum + loss
       train_loss_sum = train_loss_sum + train_loss
-      print(train_loss .. '.....' .. loss)
-      if w == patch_size and h == patch_size then
-        print(train_loss .. '.....' .. loss)
-        print(train_pixel)
-        print(pixel)
-        print(gmms)
-        --exit()
-        end
+      print((h-1)*pm.recurrent_stride+w .. '.....' .. train_loss .. '.....' .. loss)
     end
 
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
+    -- Need to fix this for the new model
     local inputs = {}
-    inputs = {pixel, unpack(states[w-1])}
+    if w == 1 and h > 1 then
+      inputs = {pixel, unpack(states[pm.recurrent_stride])}
+    else
+      inputs = {pixel, unpack(states[w-1])}
+    end
     local prev_w = w
     if states[w] == nil then prev_w = 0 end
     -- insert the states[t-1,t]
     for i,v in ipairs(states[prev_w]) do table.insert(inputs, v) end
     -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
     local lsts = pm.core:forward(inputs)
+
     -- save the state
     states[w] = {}
-    for i=1,pm.num_state do table.insert(states[w], lsts[i]) end
+    for i=1,pm.num_state do table.insert(states[w], lsts[i]:clone()) end
     gmms = lsts[#lsts]
-    ------------------------ debug ------------------------
+
   end
   collectgarbage()
 end
@@ -148,5 +149,7 @@ end
 
 loss_sum = loss_sum / (opt.img_size * opt.img_size)
 train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+--loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride - 1)
+--train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride - 1)
 print('testing loss: ', loss_sum)
 print('training loss: ', train_loss_sum)

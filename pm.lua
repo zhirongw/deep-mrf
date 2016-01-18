@@ -87,13 +87,11 @@ end
 function layer:training()
   if self.clones == nil then self:createClones() end -- create these lazily if needed
   for k,v in pairs(self.clones) do v:training() end
-  --for k,v in pairs(self.gmms) do v:training() end
 end
 
 function layer:evaluate()
   if self.clones == nil then self:createClones() end -- create these lazily if needed
   for k,v in pairs(self.clones) do v:evaluate() end
-  -- for k,v in pairs(self.gmms) do v:evaluate() end
 end
 
 --[[
@@ -132,9 +130,6 @@ function layer:updateOutput(input)
     self._states[t] = {}
     for i=1,self.num_state do table.insert(self._states[t], lsts[i]) end
     self.output[t] = lsts[#lsts]
-    -- inputs to Mixture of Gaussian encodings
-    -- table.insert(self._gmm_encodings, lsts[#lsts])
-    -- table.insert(self.output, self.gmms[t]:forward(lsts[#lsts])) -- last element is the output vector
   end
   return self.output
 end
@@ -158,7 +153,6 @@ function layer:updateGradInput(input, gradOutput)
   -- this works when init_state is all zeros
   local _dstates = {[self.seq_length] = self.init_state}
   for t=self.seq_length,1,-1 do
-    --local dgmm_encodings = self.gmms[t]:backward(self._gmm_encodings[t], gradOutput[t])
     -- concat state gradients and output vector gradients at time step t
     local douts = {}
     for k=1,#_dstates[t] do table.insert(douts, _dstates[t][k]) end
@@ -233,8 +227,9 @@ function layer:sample(input, gt_pixels)
   -- weights coeffs is taken care of at final loss, for computation efficiency and stability
   local g_w_input = input:narrow(2,p*nm*ps+1, nm):clone()
   local g_w = torch.exp(g_w_input:view(-1, nm))
+  --print(g_w)
   g_w = g_w:cdiv(torch.repeatTensor(torch.sum(g_w,2),1,nm))
-  -- print(g_w)
+  --print(g_w)
 
   local pixels = torch.Tensor(N, ps):type(input:type())
   local train_pixels = gt_pixels:float()
