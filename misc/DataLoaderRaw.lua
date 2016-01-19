@@ -77,8 +77,12 @@ function DataLoaderRaw:getBatch(opt)
   local img = self.images[self.iterator]
 
   -- two potential schems
-  local patches = torch.zeros(batch_size, self.nChannels, patch_size+1, patch_size+1)
-  --local patches = torch.rand(batch_size, self.nChannels, patch_size+1, patch_size+1)
+  local patches
+  if opt.border == 0 then
+    patches = torch.zeros(batch_size, self.nChannels, patch_size+1, patch_size+1)
+  else
+    patches = torch.rand(batch_size, self.nChannels, patch_size+1, patch_size+1)
+  end
 
   --local infos = {}
   for i=1,batch_size do

@@ -243,6 +243,188 @@ function LSTM.lstm2d(input_size, output_size, rnn_size, n, dropout, mult_in)
   return nn.gModule(inputs, outputs)
 end
 
+function LSTM.lstm3d(input_size, output_size, rnn_size, n, dropout, mult_in)
+  -- extension of 2d case with more than 2 pixel neighbors:
+  dropout = dropout or 0
+
+  -- there will be 6*n+1 inputs
+  local inputs = {}
+  table.insert(inputs, nn.Identity()()) -- indices giving the sequence of symbols
+  for L = 1,n do
+    table.insert(inputs, nn.Identity()()) -- prev_layer_1_c[L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_1_h[L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_2_c[n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_2_h[n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_3_c[2n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_3_h[2n+L]
+  end
+
+  local x, input_size_L
+  local outputs = {}
+  for L = 1,n do
+    -- c,h from the previous 2 layers
+    local prev_c_1 = inputs[L*2]
+    local prev_h_1 = inputs[L*2+1]
+    local prev_c_2 = inputs[(n+L)*2]
+    local prev_h_2 = inputs[(n+L)*2+1]
+    local prev_c_3 = inputs[(2*n+L)*2]
+    local prev_h_3 = inputs[(2*n+L)*2+1]
+    local prev_h = nn.JoinTable(2)({prev_h_1, prev_h_2, prev_h_3})
+    -- the input to this layer
+    if L == 1 then
+      x = inputs[1]
+      input_size_L = input_size
+    else
+      if mult_in then
+        x = nn.JoinTable(2)({inputs[1], outputs[(L-1)*2]})
+        input_size_L = input_size + rnn_size
+      else
+        x = outputs[(L-1)*2]
+        input_size_L = rnn_size
+      end
+      if dropout > 0 then x = nn.Dropout(dropout)(x):annotate{name='drop_' .. L} end -- apply dropout, if any
+    end
+    -- evaluate the input sums at once for efficiency, here we have 3 forget gates
+    local i2h = nn.Linear(input_size_L, (3+3*1) * rnn_size)(x):annotate{name='i2h_'..L}
+    local h2h = nn.Linear(3*rnn_size, (3+3*1) * rnn_size)(prev_h):annotate{name='h2h_'..L}
+    local all_input_sums = nn.CAddTable()({i2h, h2h})
+
+    local reshaped = nn.Reshape(6, rnn_size)(all_input_sums)
+    local n1, n2, n3, n4, n5, n6 = nn.SplitTable(2)(reshaped):split(6)
+    -- decode the gates
+    local in_gate = nn.Sigmoid()(n1)
+    local forget_gate_1 = nn.Sigmoid()(n2)
+    local forget_gate_2 = nn.Sigmoid()(n3)
+    local forget_gate_3 = nn.Sigmoid()(n4)
+    local out_gate = nn.Sigmoid()(n5)
+    -- decode the write inputs
+    local in_transform = nn.Tanh()(n6)
+    -- perform the LSTM update
+    local next_c           = nn.CAddTable()({
+        nn.CMulTable()({forget_gate_1, prev_c_1}),
+        nn.CMulTable()({forget_gate_2, prev_c_2}),
+        nn.CMulTable()({forget_gate_3, prev_c_3}),
+        nn.CMulTable()({in_gate,     in_transform})
+      })
+    -- gated cells form the output
+    local next_h = nn.CMulTable()({out_gate, nn.Tanh()(next_c)})
+
+    table.insert(outputs, next_c)
+    table.insert(outputs, next_h)
+  end
+  local top_size
+  local top_h = outputs[#outputs]
+  if mult_in then
+    top_size = n * rnn_size
+    for L = n-1,1,-1 do
+      top_h = nn.JoinTable(2)({outputs[2*L], top_h})
+    end
+  else
+    top_size = rnn_size
+  end
+  -- set up the encoder
+  if dropout > 0 then top_h = nn.Dropout(dropout)(top_h):annotate{name='drop_final'} end
+  local proj = nn.Linear(top_size, output_size)(top_h):annotate{name='encoder'}
+  -- local logsoft = nn.LogSoftMax()(proj)
+  table.insert(outputs, proj)
+
+  return nn.gModule(inputs, outputs)
+end
+
+function LSTM.lstm4d(input_size, output_size, rnn_size, n, dropout, mult_in)
+  -- extension of 2d case with more than 2 pixel neighbors:
+  dropout = dropout or 0
+
+  -- there will be 8*n+1 inputs
+  local inputs = {}
+  table.insert(inputs, nn.Identity()()) -- indices giving the sequence of symbols
+  for L = 1,n do
+    table.insert(inputs, nn.Identity()()) -- prev_layer_1_c[L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_1_h[L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_2_c[n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_2_h[n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_3_c[2n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_3_h[2n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_4_c[3n+L]
+    table.insert(inputs, nn.Identity()()) -- prev_layer_4_h[3n+L]
+  end
+
+  local x, input_size_L
+  local outputs = {}
+  for L = 1,n do
+    -- c,h from the previous 2 layers
+    local prev_c_1 = inputs[L*2]
+    local prev_h_1 = inputs[L*2+1]
+    local prev_c_2 = inputs[(n+L)*2]
+    local prev_h_2 = inputs[(n+L)*2+1]
+    local prev_c_3 = inputs[(2*n+L)*2]
+    local prev_h_3 = inputs[(2*n+L)*2+1]
+    local prev_c_4 = inputs[(3*n+L)*2]
+    local prev_h_4 = inputs[(3*n+L)*2+1]
+    local prev_h = nn.JoinTable(2)({prev_h_1, prev_h_2, prev_h_3, prev_h_4})
+    -- the input to this layer
+    if L == 1 then
+      x = inputs[1]
+      input_size_L = input_size
+    else
+      if mult_in then
+        x = nn.JoinTable(2)({inputs[1], outputs[(L-1)*2]})
+        input_size_L = input_size + rnn_size
+      else
+        x = outputs[(L-1)*2]
+        input_size_L = rnn_size
+      end
+      if dropout > 0 then x = nn.Dropout(dropout)(x):annotate{name='drop_' .. L} end -- apply dropout, if any
+    end
+    -- evaluate the input sums at once for efficiency, here we have 3 forget gates
+    local i2h = nn.Linear(input_size_L, (3+4*1) * rnn_size)(x):annotate{name='i2h_'..L}
+    local h2h = nn.Linear(4*rnn_size, (3+4*1) * rnn_size)(prev_h):annotate{name='h2h_'..L}
+    local all_input_sums = nn.CAddTable()({i2h, h2h})
+
+    local reshaped = nn.Reshape(7, rnn_size)(all_input_sums)
+    local n1, n2, n3, n4, n5, n6, n7 = nn.SplitTable(2)(reshaped):split(7)
+    -- decode the gates
+    local in_gate = nn.Sigmoid()(n1)
+    local forget_gate_1 = nn.Sigmoid()(n2)
+    local forget_gate_2 = nn.Sigmoid()(n3)
+    local forget_gate_3 = nn.Sigmoid()(n4)
+    local forget_gate_4 = nn.Sigmoid()(n5)
+    local out_gate = nn.Sigmoid()(n6)
+    -- decode the write inputs
+    local in_transform = nn.Tanh()(n7)
+    -- perform the LSTM update
+    local next_c           = nn.CAddTable()({
+        nn.CMulTable()({forget_gate_1, prev_c_1}),
+        nn.CMulTable()({forget_gate_2, prev_c_2}),
+        nn.CMulTable()({forget_gate_3, prev_c_3}),
+        nn.CMulTable()({forget_gate_4, prev_c_4}),
+        nn.CMulTable()({in_gate,     in_transform})
+      })
+    -- gated cells form the output
+    local next_h = nn.CMulTable()({out_gate, nn.Tanh()(next_c)})
+
+    table.insert(outputs, next_c)
+    table.insert(outputs, next_h)
+  end
+  local top_size
+  local top_h = outputs[#outputs]
+  if mult_in then
+    top_size = n * rnn_size
+    for L = n-1,1,-1 do
+      top_h = nn.JoinTable(2)({outputs[2*L], top_h})
+    end
+  else
+    top_size = rnn_size
+  end
+  -- set up the encoder
+  if dropout > 0 then top_h = nn.Dropout(dropout)(top_h):annotate{name='drop_final'} end
+  local proj = nn.Linear(top_size, output_size)(top_h):annotate{name='encoder'}
+  -- local logsoft = nn.LogSoftMax()(proj)
+  table.insert(outputs, proj)
+
+  return nn.gModule(inputs, outputs)
+end
+
 --net = LSTM.lstm(4,5,10,2,0,true)
 --graph.dot(net.fg, 'LSTM', 'test_net_mult2')
 

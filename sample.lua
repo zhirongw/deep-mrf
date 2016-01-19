@@ -64,6 +64,7 @@ if opt.batch_size == 0 then batch_size = checkpoint.opt.batch_size end
 -- change it to evaluation mode
 local protos = checkpoint.protos
 local patch_size = checkpoint.opt['patch_size']
+local border = checkpoint.opt['border_init']
 protos.pm.recurrent_stride = patch_size + opt.img_size
 protos.pm.seq_length = protos.pm.recurrent_stride * protos.pm.recurrent_stride
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
@@ -100,12 +101,20 @@ for h=1,pm.recurrent_stride do
   for w=1,pm.recurrent_stride do
     local pixel_left, pixel_up
     if w == 1 then
-      pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
+      if border == 0 then
+        pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else
+        pixel_left = torch.rand(batch_size, pm.pixel_size):cuda()
+      end
     else
       pixel_left = images[{{}, {}, h, w-1}]
     end
     if h == 1 then
-      pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+      if border == 0 then
+        pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else
+        pixel_up = torch.rand(batch_size, pm.pixel_size):cuda()
+      end
     else
       pixel_up = images[{{}, {}, h-1,w}]
     end
@@ -127,13 +136,14 @@ for h=1,pm.recurrent_stride do
 
 
     -- sampling
-    if w < patch_size and h < patch_size and false then
+    --if w < patch_size or h < patch_size then
+    if false then
       pixel = img[{{}, {}, h, w}]
       images[{{},{},h,w}] = pixel
     else
       local train_pixel = img[{{}, {}, h, w}]:clone()
       pixel, loss, train_loss = pm:sample(gmms, train_pixel)
-      pixel = train_pixel
+      --pixel = train_pixel
       images[{{},{},h,w}] = pixel
       loss_sum = loss_sum + loss
       train_loss_sum = train_loss_sum + train_loss
@@ -144,16 +154,16 @@ end
 
 -- output the sampled images
 local images_cpu = images:float()
---images_cpu = images_cpu[{{}, {}, {patch_size, pm.recurrent_stride},{patch_size, pm.recurrent_stride}}]
+images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
 images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
 for i=1,batch_size do
   local filename = path.join('samples', i .. '.png')
   image.save(filename, images_cpu[{i,1,{},{}}])
 end
 
---loss_sum = loss_sum / (opt.img_size * opt.img_size)
---train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
-loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
-train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+loss_sum = loss_sum / (opt.img_size * opt.img_size)
+train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+--loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+--train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
 print('testing loss: ', loss_sum)
 print('training loss: ', train_loss_sum)
