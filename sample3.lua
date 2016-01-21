@@ -101,15 +101,32 @@ local gmms
 -- loop through each timestep
 for h=1,pm.recurrent_stride do
   for w=1,pm.recurrent_stride do
-    local pixel_left, pixel_up
-    if w == 1 then
+    local ww = w -- actual coordinate
+    if h % 2 == 0 then ww = pm.recurrent_stride + 1 - w end
+
+    local pixel_left, pixel_up, pixel_right
+    local pl, pr, pu
+    if ww == 1 or h % 2 == 0 then
       if border == 0 then
         pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
       else
         pixel_left = torch.rand(batch_size, pm.pixel_size):cuda()
       end
+      pl = 0
     else
-      pixel_left = images[{{}, {}, h, w-1}]
+      pixel_left = images[{{}, {}, h, ww-1}]
+      pl = ww - 1
+    end
+    if ww == pm.recurrent_stride or h % 2 == 1 then
+      if border == 0 then
+        pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else
+        pixel_right = torch.rand(batch_size, pm.pixel_size):cuda()
+      end
+      pr = 0
+    else
+      pixel_right = images[{{}, {}, h, ww+1}]
+      pr = ww + 1
     end
     if h == 1 then
       if border == 0 then
@@ -117,39 +134,36 @@ for h=1,pm.recurrent_stride do
       else
         pixel_up = torch.rand(batch_size, pm.pixel_size):cuda()
       end
+      pu = 0
     else
-      pixel_up = images[{{}, {}, h-1,w}]
+      pixel_up = images[{{}, {}, h-1, ww}]
+      pu = ww
     end
 
-    -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
+    -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
     -- Need to fix this for the new model
-    local inputs = {torch.cat(pixel_left, pixel_up, 2), unpack(states[w-1])}
-    local prev_w = w
-    if states[w] == nil then prev_w = 0 end
+    local inputs = {torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), unpack(states[pl])}
     -- insert the states[t-1,t]
-    for i,v in ipairs(states[prev_w]) do table.insert(inputs, v) end
+    for i,v in ipairs(states[pu]) do table.insert(inputs, v) end
+    -- insert the states[t,t+1]
+    for i,v in ipairs(states[pr]) do table.insert(inputs, v) end
     -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
     local lsts = pm.core:forward(inputs)
 
     -- save the state
-    states[w] = {}
-    for i=1,pm.num_state do table.insert(states[w], lsts[i]:clone()) end
+    states[ww] = {}
+    for i=1,pm.num_state do table.insert(states[ww], lsts[i]:clone()) end
     gmms = lsts[#lsts]
 
-
     -- sampling
-    --if w < patch_size or h < patch_size then
-    if false then
-      pixel = img[{{}, {}, h, w}]
-      images[{{},{},h,w}] = pixel
-    else
-      local train_pixel = img[{{}, {}, h, w}]:clone()
-      pixel, loss, train_loss = crit:sample(gmms, train_pixel)
-      --pixel = train_pixel
-      images[{{},{},h,w}] = pixel
-      loss_sum = loss_sum + loss
-      train_loss_sum = train_loss_sum + train_loss
-    end
+    --pixel = img[{{}, {}, h, ww}]
+    --images[{{},{},h,ww}] = pixel
+    local train_pixel = img[{{}, {}, h, ww}]:clone()
+    pixel, loss, train_loss = crit:sample(gmms, train_pixel)
+    --pixel = train_pixel
+    images[{{},{},h,ww}] = pixel
+    loss_sum = loss_sum + loss
+    train_loss_sum = train_loss_sum + train_loss
   end
   collectgarbage()
 end
@@ -163,9 +177,9 @@ for i=1,batch_size do
   image.save(filename, images_cpu[{i,1,{},{}}])
 end
 
-loss_sum = loss_sum / (opt.img_size * opt.img_size)
-train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
---loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
---train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+--loss_sum = loss_sum / (opt.img_size * opt.img_size)
+--train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
 print('testing loss: ', loss_sum)
 print('training loss: ', train_loss_sum)

@@ -30,7 +30,7 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
-cmd:option('-patch_size',25,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-patch_size',19,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-num_neighbors',2,'number of neighbors for each pixel')
 cmd:option('-border_init', 1, 'ways to initialize the border, 0 for zeros, 1 for random.')
 
@@ -51,7 +51,7 @@ cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothi
 
 -- Evaluation/Checkpointing
 cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
-cmd:option('-checkpoint_path', 'models/p25r', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc
@@ -111,7 +111,14 @@ else
   pmOpt.seq_length = opt.patch_size * opt.patch_size
   pmOpt.mult_in = opt.mult_in
   pmOpt.num_neighbors = opt.num_neighbors
-  protos.pm = nn.PixelModel(pmOpt)
+  pmOpt.border_init = opt.border_init
+  if opt.num_neighbors == 2 then
+    protos.pm = nn.PixelModel(pmOpt)
+  elseif opt.num_neighbors == 3 then
+    protos.pm = nn.PixelModel3N(pmOpt)
+  else -- 4
+    protos.pm = nn.PixelModel4N(pmOpt)
+  end
   -- criterion for the pixel model
   protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures)
 end

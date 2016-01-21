@@ -76,19 +76,19 @@ function DataLoaderRaw:getBatch(opt)
   -- load an image
   local img = self.images[self.iterator]
 
-  -- two potential schems
+  -- two potential schemes, initialize with a border of one pixel in both directions.
   local patches
   if opt.border == 0 then
-    patches = torch.zeros(batch_size, self.nChannels, patch_size+1, patch_size+1)
+    patches = torch.zeros(batch_size, self.nChannels, patch_size+2, patch_size+2)
   else
-    patches = torch.rand(batch_size, self.nChannels, patch_size+1, patch_size+1)
+    patches = torch.rand(batch_size, self.nChannels, patch_size+2, patch_size+2)
   end
 
   --local infos = {}
   for i=1,batch_size do
     local h = torch.random(1, self.nHeight-patch_size+1)
     local w = torch.random(1, self.nWidth-patch_size+1)
-
+    -- put the patch in the center.
     patches[{i,{},{2,patch_size+1},{2,patch_size+1}}] = img[{{}, {h, h+patch_size-1}, {w, w+patch_size-1}}]
     -- and record associated info as well
     -- local info_struct = {}
@@ -100,14 +100,32 @@ function DataLoaderRaw:getBatch(opt)
   local targets = patches[{{},{},{2,patch_size+1},{2,patch_size+1}}]:clone()
   targets = targets:view(batch_size, self.nChannels, -1)
   targets = targets:permute(3, 1, 2)
-  -- prepare the inputs. -n1, left, n2, up.
-  local n1 = patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()
+  -- prepare the inputs. -n1, left, n2, up, n3, right, n4 down.
+  local n1, n2, n3, n4, inputs
+  n1 = patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()
   n1 = n1:view(batch_size, self.nChannels, -1)
   n1 = n1:permute(3, 1, 2)
-  local n2 = patches[{{},{},{1,patch_size},{2,patch_size+1}}]:clone()
+  n2 = patches[{{},{},{1,patch_size},{2,patch_size+1}}]:clone()
   n2 = n2:view(batch_size, self.nChannels, -1)
   n2 = n2:permute(3, 1, 2)
-  local inputs = torch.cat(n1, n2, 3)
+  if opt.num_neighbors == 2 then
+    inputs = torch.cat(n1, n2, 3)
+  end
+  if opt.num_neighbors == 3 then
+    n3 = patches[{{},{},{2,patch_size+1},{3,patch_size+2}}]:clone()
+    n3 = n3:view(batch_size, self.nChannels, -1)
+    n3 = n3:permute(3, 1, 2)
+    inputs = torch.cat({n1, n2, n3}, 3)
+  end
+  if opt.num_neighbors == 4 then
+    n3 = patches[{{},{},{2,patch_size+1},{3,patch_size+2}}]:clone()
+    n3 = n3:view(batch_size, self.nChannels, -1)
+    n3 = n3:permute(3, 1, 2)
+    n4 = patches[{{},{},{3,patch_size+2},{2,patch_size+1}}]:clone()
+    n4 = n4:view(batch_size, self.nChannels, -1)
+    n4 = n4:permute(3, 1, 2)
+    inputs = torch.cat({n1, n2, n3, n4}, 3)
+  end
 
   local data = {}
   data.pixels = inputs

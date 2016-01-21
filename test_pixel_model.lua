@@ -95,7 +95,7 @@ local function gradCheckPM()
 
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 1
+  opt.pixel_size = 3
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -104,13 +104,11 @@ local function gradCheckPM()
   opt.seq_length = 7
   opt.batch_size = 10
   opt.mult_in = true
-  opt.num_neighbors = 1
-  local pm = nn.PixelModel(opt)
+  opt.num_neighbors = 3
+  local pm = nn.PixelModel3N(opt)
   pm:type(dtype)
 
-  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
-  --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
-  --local seq = torch.cat(pixels, borders, 3):type(dtype)
+  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*opt.num_neighbors)
 
   -- evaluate the analytic gradient
   local output = pm:forward(pixels)
