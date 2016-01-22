@@ -21,10 +21,43 @@ function mvn.pdf(x, cholesky)
   return math.exp(r)
 end
 
+-- batch triangle matrix inverse, assumes downside triangle in 3 dimensions
+function mvn.btmi(cholesky)
+  local inv = cholesky:clone()
+  inv[{{}, 1, 1}]:fill(1):cdiv(cholesky[{{}, 1, 1}])
+  inv[{{}, 2, 2}]:fill(1):cdiv(cholesky[{{}, 2, 2}])
+  inv[{{}, 3, 3}]:fill(1):cdiv(cholesky[{{}, 3, 3}])
+  inv[{{}, 2, 1}]:cmul(inv[{{}, 1, 1}])
+  inv[{{}, 3, 1}]:cmul(inv[{{}, 1, 1}])
+  inv[{{}, 3, 2}]:cmul(inv[{{}, 2, 2}])
+  inv[{{}, 3, 1}]:csub(torch.cmul(inv[{{}, 2, 1}], inv[{{}, 3, 2}]))
+  inv[{{}, 2, 1}]:cmul(inv[{{}, 2, 2}]):mul(-1)
+  inv[{{}, 3, 2}]:cmul(inv[{{}, 3, 3}]):mul(-1)
+  inv[{{}, 3, 1}]:cmul(inv[{{}, 3, 3}]):mul(-1)
+  return inv
+end
+
+-- batch gaussian densify for 3 dimensional input
+function mvn.b3normpdf(x, cholesky_inv)
+  local r = mvn.b3normlogpdf(x, cholesky_inv)
+  return torch.exp(r)
+end
+
+function mvn.b3normlogpdf(x, cholesky_inv)
+  assert(x:size(1) == cholesky_inv:size(1))
+  local transformed = torch.bmm(cholesky_inv, x)
+  local logdet = torch.log(torch.cmul(torch.cmul(cholesky_inv[{{},1,1}], cholesky_inv[{{},2,2}]), cholesky_inv[{{},3,3}]))
+  --transformed:apply(function(a) return mvn.logunit(a) end)
+  transformed:cmul(transformed):mul(-0.5):add(- 0.5 * math.log(2*math.pi))
+  local result = torch.add(torch.sum(transformed, 2), logdet)
+  return result
+end
+
 function mvn.logunit(x)
   return -.5 * x*x - 0.5 * math.log(2*math.pi)
 end
 
+-- batch gaussian densify for a scalar distribution
 function mvn.bnormpdf(x, sigma)
   local r = mvn.bnormlogpdf(x, sigma)
   return torch.exp(r)
