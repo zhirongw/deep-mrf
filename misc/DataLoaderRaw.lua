@@ -46,9 +46,11 @@ function DataLoaderRaw:__init(opt)
   if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end
 
   local img = image.load(self.files[self.iterator], self.nChannels, 'float')
-  img = image.scale(img, opt.img_size, opt.img_size)
-  img = img:resize(self.nChannels, opt.img_size, opt.img_size)
-  -- print(img[{{},1,1}])
+  --if self.nChannels == 1 then img = img:resize(1, img:size(1), img:size(2)) end
+  if img:size(2) > opt.img_size or img:size(3) > opt.img_size then
+    img = image.scale(img, opt.img_size)
+  end
+
   self.images[self.iterator] = img
   self.nHeight = img:size(2)
   self.nWidth = img:size(3)

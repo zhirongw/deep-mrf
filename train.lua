@@ -30,7 +30,7 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
-cmd:option('-patch_size',19,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-num_neighbors',2,'number of neighbors for each pixel')
 cmd:option('-border_init', 1, 'ways to initialize the border, 0 for zeros, 1 for random.')
 
@@ -45,7 +45,7 @@ cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|ad
 cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 500, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-optim_alpha',0.90,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
@@ -126,8 +126,6 @@ end
 -- ship everything to GPU, maybe
 if opt.gpuid >= 0 then
   for k,v in pairs(protos) do v:cuda() end
-  -- criterion for color image run on CPU.
-  if ps == 3 then protos.crit:float() end
 end
 
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
@@ -135,6 +133,7 @@ print('Number of pixels in the neighbor: ', opt.num_neighbors)
 print('Hidden nodes in each layer: ', opt.rnn_size)
 print('Number of mixtures for output gaussians: ', opt.num_mixtures)
 print('The input image local patch size: ', opt.patch_size)
+print('Input channel dimension: ', opt.color*2+1)
 print('Training batch size: ', opt.batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
