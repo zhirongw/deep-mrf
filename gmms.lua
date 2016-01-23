@@ -173,7 +173,7 @@ end
 
 local gmms = {}
 
-function crit:sample(input, gt_pixels)
+function crit:sample(input, temperature, gt_pixels)
   local N, G = input:size(1), input:size(2)
   local ps = self.pixel_size
   local nm = self.num_mixtures
@@ -215,77 +215,47 @@ function crit:sample(input, gt_pixels)
   -- weights coeffs is taken care of at final loss, for computation efficiency and stability
   local g_w_input = input:narrow(2,p*nm*ps+1, nm):clone()
   local g_w = torch.exp(g_w_input:view(-1, nm))
-  --print(g_w)
   g_w = g_w:cdiv(torch.repeatTensor(torch.sum(g_w,2),1,nm))
+  local g_ws = torch.exp(g_w_input:div(temperature))
+  g_ws = g_ws:cdiv(torch.repeatTensor(torch.sum(g_ws,2),1,nm))
   --print(g_w)
 
   local pixels = torch.Tensor(N, ps):type(input:type())
   local train_pixels = gt_pixels:float()
-  local losses = 0
-  local train_losses = 0
-  local g_clk_x, g_w_x, g_mean_x
-  if input:type() == 'torch.CudaTensor' then
-    g_clk_x = g_clk:float()
-    g_w_x = g_w:float()
-    g_mean_x = g_mean:float()
-  else
-    g_clk_x = g_clk
-    g_w_x = g_w
-    g_mean_x = g_mean
-  end
+
   -- sampling process
-  local mix_idx
-  mix_idx = torch.multinomial(g_w, 1)
-  --ignore, mix_idx = torch.max(g_w, 2)
-  --mix_idx = mix_idx:resize(N,1)
+  local mix_idx = torch.multinomial(g_ws, 1)
+
   for b=1,N do
-    -- print('------------------------------------------')
-    -- sample from the multinomial
-    --print(mix_idx)
-    --local max_prob, mix_idx
-    --max_prob, mix_idx = torch.max(g_w[b], 1)
-    --mix_idx = mix_idx[1]
-    --print(mix_idx)
-    -- sample from the mvn gaussians
-    -- print(g_mean[{b, mix_idx, {}}])
-    -- print(g_clk[{b, mix_idx, {}, {}}])
     local p = mvn.rnd(g_mean[{b, mix_idx[{b,1}], {}}], g_clk[{b, mix_idx[{b,1}], {},{}}])
-    --p = g_mean[{b, mix_idx[{b,1}], {}}]
     pixels[b] = p
-    if ps == 3 then
-      -- evaluate the loss
-      local g_rpb_ = torch.Tensor(nm):zero()
-      local pf = p:float()
-      --print(pf)
-      for g=1,nm do -- iterate over mixtures
-        g_rpb_[g] = mvn.pdf(pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
-      end
-      local pdf = torch.sum(g_rpb_)
-      losses = losses - torch.log(pdf)
-      -- VALIDATION
-      local train_g_rpb_ = torch.Tensor(nm):zero()
-      local train_pf = train_pixels[b]
-      --print(val_pf)
-      for g=1,nm do -- iterate over mixtures
-        train_g_rpb_[g] = mvn.pdf(train_pf, g_mean_x[{b,g,{}}], g_clk_x[{b,g,{},{}}]) * g_w_x[{b,g}]
-      end
-      local train_pdf = torch.sum(train_g_rpb_)
-      train_losses = train_losses - torch.log(train_pdf)
-    end
   end
 
   -- evaluate the loss
+  local losses
+  local train_losses
   if ps == 1 then
     -- for synthesis pixels
     local g_mean_diff = torch.repeatTensor(pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
-    local g_rpb = mvn.bnormpdf(g_mean_diff, g_clk)
-    g_rpb = g_rpb:cmul(g_w)
+    local g_rpb = mvn.bnormpdf(g_mean_diff, g_clk):cmul(g_w)
     local pdf = torch.sum(g_rpb, 2)
     losses = - torch.sum(torch.log(pdf))
     -- for training pixels
     g_mean_diff = torch.repeatTensor(gt_pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
     g_rpb = mvn.bnormpdf(g_mean_diff, g_clk)
     g_rpb = g_rpb:cmul(g_w)
+    pdf = torch.sum(g_rpb, 2)
+    train_losses = - torch.sum(torch.log(pdf))
+  else
+    local g_clk_inv = mvn.btmi(g_clk)
+    -- for synthesis pixels
+    local g_mean_diff = torch.repeatTensor(pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
+    local g_rpb = mvn.b3normpdf(g_mean_diff, g_clk_inv):cmul(g_w)
+    local pdf = torch.sum(g_rpb, 2)
+    losses = - torch.sum(torch.log(pdf))
+    -- for training pixels
+    g_mean_diff = torch.repeatTensor(gt_pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
+    g_rpb = mvn.b3normpdf(g_mean_diff, g_clk_inv):cmul(g_w)
     pdf = torch.sum(g_rpb, 2)
     train_losses = - torch.sum(torch.log(pdf))
   end

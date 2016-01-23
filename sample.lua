@@ -61,6 +61,7 @@ assert(string.len(opt.model) > 0, 'must provide a model')
 local checkpoint = torch.load(opt.model)
 local batch_size = opt.batch_size
 if opt.batch_size == 0 then batch_size = checkpoint.opt.batch_size end
+local temperature = opt.temperature
 
 -- change it to evaluation mode
 local protos = checkpoint.protos
@@ -73,6 +74,7 @@ local pm = protos.pm
 local crit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures)
 pm.core:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
+print('Number of neighbors used: ', pm.num_neighbors)
 
 -- prepare the empty states
 local init_state = {}
@@ -91,81 +93,175 @@ local img = image.load('imgs/D1.png', pm.pixel_size, 'float')
 img = image.scale(img, 256, 256):resize(1, pm.pixel_size, 256, 256)
 img = torch.repeatTensor(img, batch_size, 1, 1, 1)
 img = img:cuda()
+-------------------------------------------------
 
-local loss_sum = 0
-local train_loss_sum = 0
--- random seed the zero-th pixel
--- local pixel = torch.rand(batch_size, pm.pixel_size):cuda()
-local pixel
-local gmms
--- loop through each timestep
-for h=1,pm.recurrent_stride do
-  for w=1,pm.recurrent_stride do
-    local pixel_left, pixel_up
-    if w == 1 then
-      if border == 0 then
-        pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
+local function sample2n()
+  local loss_sum = 0
+  local train_loss_sum = 0
+
+  local pixel
+  local gmms
+  -- loop through each timestep
+  for h=1,pm.recurrent_stride do
+    for w=1,pm.recurrent_stride do
+      local pixel_left, pixel_up
+      if w == 1 then
+        if border == 0 then
+          pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
+        else
+          pixel_left = torch.rand(batch_size, pm.pixel_size):cuda()
+        end
       else
-        pixel_left = torch.rand(batch_size, pm.pixel_size):cuda()
+        pixel_left = images[{{}, {}, h, w-1}]
       end
-    else
-      pixel_left = images[{{}, {}, h, w-1}]
-    end
-    if h == 1 then
-      if border == 0 then
-        pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+      if h == 1 then
+        if border == 0 then
+          pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+        else
+          pixel_up = torch.rand(batch_size, pm.pixel_size):cuda()
+        end
       else
-        pixel_up = torch.rand(batch_size, pm.pixel_size):cuda()
+        pixel_up = images[{{}, {}, h-1,w}]
       end
-    else
-      pixel_up = images[{{}, {}, h-1,w}]
-    end
 
-    -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
-    -- Need to fix this for the new model
-    local inputs = {torch.cat(pixel_left, pixel_up, 2), unpack(states[w-1])}
-    local prev_w = w
-    if states[w] == nil then prev_w = 0 end
-    -- insert the states[t-1,t]
-    for i,v in ipairs(states[prev_w]) do table.insert(inputs, v) end
-    -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
-    local lsts = pm.core:forward(inputs)
+      -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
+      -- Need to fix this for the new model
+      local inputs = {torch.cat(pixel_left, pixel_up, 2), unpack(states[w-1])}
+      local prev_w = w
+      if states[w] == nil then prev_w = 0 end
+      -- insert the states[t-1,t]
+      for i,v in ipairs(states[prev_w]) do table.insert(inputs, v) end
+      -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
+      local lsts = pm.core:forward(inputs)
 
-    -- save the state
-    states[w] = {}
-    for i=1,pm.num_state do table.insert(states[w], lsts[i]:clone()) end
-    gmms = lsts[#lsts]
+      -- save the state
+      states[w] = {}
+      for i=1,pm.num_state do table.insert(states[w], lsts[i]:clone()) end
+      gmms = lsts[#lsts]
 
-
-    -- sampling
-    --if w < patch_size or h < patch_size then
-    if false then
-      pixel = img[{{}, {}, h, w}]
-      images[{{},{},h,w}] = pixel
-    else
+      -- sampling
       local train_pixel = img[{{}, {}, h, w}]:clone()
-      pixel, loss, train_loss = crit:sample(gmms, train_pixel)
+      pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
       --pixel = train_pixel
       images[{{},{},h,w}] = pixel
       loss_sum = loss_sum + loss
       train_loss_sum = train_loss_sum + train_loss
     end
+    collectgarbage()
   end
-  collectgarbage()
+
+  -- output the sampled images
+  local images_cpu = images:float()
+  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
+  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
+  for i=1,batch_size do
+    local filename = path.join('samples', i .. '.png')
+    image.save(filename, images_cpu[{i,1,{},{}}])
+  end
+
+  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
+  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+  loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+  train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+  print('testing loss: ', loss_sum)
+  print('training loss: ', train_loss_sum)
 end
 
--- output the sampled images
-local images_cpu = images:float()
-images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
-images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
-for i=1,batch_size do
-  local filename = path.join('samples', i .. '.png')
-  image.save(filename, images_cpu[{i,1,{},{}}])
+local function sample3n()
+  local loss_sum = 0
+  local train_loss_sum = 0
+
+  local pixel
+  local gmms
+  -- loop through each timestep
+  for h=1,pm.recurrent_stride do
+    for w=1,pm.recurrent_stride do
+      local ww = w -- actual coordinate
+      if h % 2 == 0 then ww = pm.recurrent_stride + 1 - w end
+
+      local pixel_left, pixel_up, pixel_right
+      local pl, pr, pu
+      if ww == 1 or h % 2 == 0 then
+        if border == 0 then
+          pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
+        else
+          pixel_left = torch.rand(batch_size, pm.pixel_size):cuda()
+        end
+        pl = 0
+      else
+        pixel_left = images[{{}, {}, h, ww-1}]
+        pl = ww - 1
+      end
+      if ww == pm.recurrent_stride or h % 2 == 1 then
+        if border == 0 then
+          pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
+        else
+          pixel_right = torch.rand(batch_size, pm.pixel_size):cuda()
+        end
+        pr = 0
+      else
+        pixel_right = images[{{}, {}, h, ww+1}]
+        pr = ww + 1
+      end
+      if h == 1 then
+        if border == 0 then
+          pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+        else
+          pixel_up = torch.rand(batch_size, pm.pixel_size):cuda()
+        end
+        pu = 0
+      else
+        pixel_up = images[{{}, {}, h-1, ww}]
+        pu = ww
+      end
+
+      -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
+      -- Need to fix this for the new model
+      local inputs = {torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), unpack(states[pl])}
+      -- insert the states[t-1,t]
+      for i,v in ipairs(states[pu]) do table.insert(inputs, v) end
+      -- insert the states[t,t+1]
+      for i,v in ipairs(states[pr]) do table.insert(inputs, v) end
+      -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
+      local lsts = pm.core:forward(inputs)
+
+      -- save the state
+      states[ww] = {}
+      for i=1,pm.num_state do table.insert(states[ww], lsts[i]:clone()) end
+      gmms = lsts[#lsts]
+
+      -- sampling
+      local train_pixel = img[{{}, {}, h, ww}]:clone()
+      pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
+      --pixel = train_pixel
+      images[{{},{},h,ww}] = pixel
+      loss_sum = loss_sum + loss
+      train_loss_sum = train_loss_sum + train_loss
+    end
+    collectgarbage()
+  end
+
+  -- output the sampled images
+  local images_cpu = images:float()
+  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
+  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
+  for i=1,batch_size do
+    local filename = path.join('samples', i .. '.png')
+    image.save(filename, images_cpu[{i,1,{},{}}])
+  end
+
+  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
+  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+  loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+  train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
+  print('testing loss: ', loss_sum)
+  print('training loss: ', train_loss_sum)
 end
 
-loss_sum = loss_sum / (opt.img_size * opt.img_size)
-train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
---loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
---train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
-print('testing loss: ', loss_sum)
-print('training loss: ', train_loss_sum)
+if pm.num_neighbors == 2 then
+  sample2n()
+elseif pm.num_neighbors == 3 then
+  sample3n()
+else
+  print('not implemented')
+end

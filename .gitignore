@@ -2,3 +2,5 @@
 *.ipynb
 models/
 samples/
+scripts/
+logs/
