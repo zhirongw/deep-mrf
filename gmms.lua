@@ -247,15 +247,20 @@ function crit:sample(input, temperature, gt_pixels)
     pdf = torch.sum(g_rpb, 2)
     train_losses = - torch.sum(torch.log(pdf))
   else
+    g_clk = g_clk:view(-1, 3, 3)
     local g_clk_inv = mvn.btmi(g_clk)
     -- for synthesis pixels
     local g_mean_diff = torch.repeatTensor(pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
+    g_mean_diff = g_mean_diff:view(-1, 3, 1)
     local g_rpb = mvn.b3normpdf(g_mean_diff, g_clk_inv):cmul(g_w)
+    g_rpb = g_rpb:view(N, nm, 1)
     local pdf = torch.sum(g_rpb, 2)
     losses = - torch.sum(torch.log(pdf))
     -- for training pixels
     g_mean_diff = torch.repeatTensor(gt_pixels:view(N, 1, ps),1,nm,1):add(-1, g_mean)
+    g_mean_diff = g_mean_diff:view(-1, 3, 1)
     g_rpb = mvn.b3normpdf(g_mean_diff, g_clk_inv):cmul(g_w)
+    g_rpb = g_rpb:view(N, nm, 1)
     pdf = torch.sum(g_rpb, 2)
     train_losses = - torch.sum(torch.log(pdf))
   end

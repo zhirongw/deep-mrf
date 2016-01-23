@@ -156,7 +156,7 @@ local function sample2n()
   images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
   for i=1,batch_size do
     local filename = path.join('samples', i .. '.png')
-    image.save(filename, images_cpu[{i,1,{},{}}])
+    image.save(filename, images_cpu[{i,{},{},{}}])
   end
 
   --loss_sum = loss_sum / (opt.img_size * opt.img_size)
@@ -247,7 +247,7 @@ local function sample3n()
   images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
   for i=1,batch_size do
     local filename = path.join('samples', i .. '.png')
-    image.save(filename, images_cpu[{i,1,{},{}}])
+    image.save(filename, images_cpu[{i,{},{},{}}])
   end
 
   --loss_sum = loss_sum / (opt.img_size * opt.img_size)
