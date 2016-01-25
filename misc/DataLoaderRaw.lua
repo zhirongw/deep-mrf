@@ -101,7 +101,7 @@ function DataLoaderRaw:getBatch(opt)
   -- prepare the targets
   local targets = patches[{{},{},{2,patch_size+1},{2,patch_size+1}}]:clone()
   targets = targets:view(batch_size, self.nChannels, -1)
-  targets = targets:permute(3, 1, 2)
+  targets = targets:permute(3, 1, 2):contiguous()
   -- prepare the inputs. -n1, left, n2, up, n3, right, n4 down.
   local n1, n2, n3, n4, inputs
   n1 = patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()

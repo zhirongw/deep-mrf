@@ -9,7 +9,7 @@ local mvn = require 'misc.mvn'
 -------------------------------------------------------------------------------
 
 local crit, parent = torch.class('nn.PixelModelCriterion', 'nn.Criterion')
-function crit:__init(pixel_size, num_mixtures)
+function crit:__init(pixel_size, num_mixtures, opt)
   parent.__init(self)
   self.pixel_size = pixel_size
   self.num_mixtures = num_mixtures
@@ -21,8 +21,31 @@ function crit:__init(pixel_size, num_mixtures)
   if pixel_size == 3 then self.var_mm = nn.MM() end
   self.w_softmax = nn.SoftMax()
   self.var_exp = nn.Exp()
+  self.opt = opt
 end
 
+-- only runs in the first batch
+function crit:_createLossWeights(input)
+    local D = input:size(1)
+    local N = input:size(2)
+    local nm = self.num_mixtures
+    -- here we assume that D is a square number
+    local L = math.sqrt(D)
+    if self.opt.policy == 'exp' then
+      local w = torch.cpow(torch.Tensor(L):fill(self.opt.val), torch.range(L-1,0,-1))
+      w = w:resize(L, 1, 1, 1)
+      w = torch.repeatTensor(w, 1, L, N, nm)
+      self.LW = w:view(D, N, nm)
+    elseif self.opt.policy == 'linear' then
+      local w = torch.range(1, L):mul(1/L)
+      w = w:resize(L, 1, 1)
+      w = torch.repeatTensor(w, 1, L, N, nm)
+      self.LW = w:view(D, N, nm)
+    else -- constant
+      self.LW = torch.Tensor(D, N, nm):fill(1.0)
+    end
+    self.LW = self.LW:type(input:type())
+end
 --[[
 -- this is an optimized version of the gmm loss, though looks ugly though
 inputs:
@@ -48,6 +71,7 @@ function crit:updateOutput(input, target)
   assert(N == N_, 'input Tensor should have the same batch size as the target')
   assert(ps == self.pixel_size, 'input dimensions of pixel do not match')
   local nm = self.num_mixtures
+  if self.LW == nil then self:_createLossWeights(input) end
 
   -- decode the gmms first
   -- mean undertake no changes
@@ -103,8 +127,9 @@ function crit:updateOutput(input, target)
   local pdf = torch.sum(g_rpb, 3)
 
   -- do the loss the gradients
-  local loss = - torch.sum(torch.log(pdf)) -- loss of pixels, Mixture of Gaussians
+  local loss = - torch.sum(torch.cmul(torch.log(pdf), (self.LW[{{},{},1}]))) -- loss of pixels, Mixture of Gaussians
 
+  g_rpb = g_rpb:cmul(self.LW)
   local grad_g_w = - torch.cdiv(g_rpb, torch.repeatTensor(pdf,1,1,nm))
 
   local mean_left = g_mean_diff:view(-1, ps, 1)
@@ -122,7 +147,7 @@ function crit:updateOutput(input, target)
   -- mean undertake no changes
   grad_g_mean = grad_g_mean:view(D, N, -1)
   -- gradient of weight is tricky, making it efficient together with softmax
-  grad_g_w:add(g_w)
+  grad_g_w:add(g_w:cmul(self.LW))
   grad_g_w = grad_g_w:view(D, N, -1)
   -- gradient of the var, and cov
   local grad_g_var
@@ -148,10 +173,11 @@ function crit:updateOutput(input, target)
     grad_g_var = grad_g_var:view(D, N, -1)
   end
 
-  grad_g_mean:div(D*N)
-  grad_g_var:div(D*N)
-  if ps == 3 then grad_g_cov:div(D*N) end
-  grad_g_w:div(D*N)
+  local Z = torch.sum(self.LW[{{},{},1}])
+  grad_g_mean:div(Z)
+  grad_g_var:div(Z)
+  if ps == 3 then grad_g_cov:div(Z) end
+  grad_g_w:div(Z)
 
   -- concat to gradInput
   if self.pixel_size == 3 then
@@ -162,7 +188,7 @@ function crit:updateOutput(input, target)
   end
 
   -- return the loss
-  self.output = (loss) / (D*N)
+  self.output = (loss) / (Z)
   return self.output
 end
 

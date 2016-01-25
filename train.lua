@@ -40,6 +40,8 @@ cmd:option('-batch_size',32,'what is the batch size in number of images per batc
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
+cmd:option('-loss_policy', 'exp', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
+cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 -- Optimization: for the Pixel Model
 cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',1e-4,'learning rate')
@@ -95,7 +97,8 @@ if string.len(opt.start_from) > 0 then
   protos = loaded_checkpoint.protos
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
-  protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures) -- not in checkpoints, create manually
+  protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures
+                  {policy=loaded_checkpoint.opt.loss_policy, val=loaded_checkpoint.opt.loss_decay}) -- not in checkpoints, create manually
   iter = loaded_checkpoint.iter
 else
   -- create protos from scratch
@@ -120,7 +123,8 @@ else
     protos.pm = nn.PixelModel4N(pmOpt)
   end
   -- criterion for the pixel model
-  protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures)
+  protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures,
+                  {policy=opt.loss_policy, val=opt.loss_decay})
 end
 
 -- ship everything to GPU, maybe

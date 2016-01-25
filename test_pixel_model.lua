@@ -143,16 +143,16 @@ end
 local function gradCheckCrit()
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 1
+  opt.pixel_size = 3
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
   opt.num_layers = 2
   opt.dropout = 0
-  opt.seq_length = 7
+  opt.seq_length = 9
   opt.batch_size = 2
   opt.mult_in = true
-  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
+  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures, {policy='linear', val=0.9})
   crit:type(dtype)
 
   local gmms = torch.rand(opt.seq_length, opt.batch_size, crit.output_size)
@@ -338,8 +338,8 @@ end
 --tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
-tests.gradCheckPM = gradCheckPM
--- tests.gradCheckCrit = gradCheckCrit
+--tests.gradCheckPM = gradCheckPM
+tests.gradCheckCrit = gradCheckCrit
 --tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample
