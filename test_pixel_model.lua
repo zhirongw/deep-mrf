@@ -101,11 +101,12 @@ local function gradCheckPM()
   opt.rnn_size = 8
   opt.num_layers = 2
   opt.dropout = 0
-  opt.seq_length = 7
-  opt.batch_size = 10
-  opt.mult_in = true
-  opt.num_neighbors = 3
-  local pm = nn.PixelModel3N(opt)
+  opt.seq_length = 9
+  opt.batch_size = 5
+  opt.mult_in = false
+  opt.num_neighbors = 4
+  opt.border_init = 0
+  local pm = nn.PixelModel4N(opt)
   pm:type(dtype)
 
   local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*opt.num_neighbors)
@@ -152,6 +153,8 @@ local function gradCheckCrit()
   opt.seq_length = 9
   opt.batch_size = 2
   opt.mult_in = true
+  opt.num_neighbors = 4
+  opt.border_init = 0
   local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures, {policy='linear', val=0.9})
   crit:type(dtype)
 
@@ -193,15 +196,17 @@ local function gradCheck()
   opt.rnn_size = 8
   opt.num_layers = 2
   opt.dropout = 0
-  opt.seq_length = 7
+  opt.seq_length = 9
   opt.batch_size = 2
   opt.mult_in = true
-  local pm = nn.PixelModel(opt)
-  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures)
+  opt.num_neighbors = 4
+  opt.border_init = 0
+  local pm = nn.PixelModel4N(opt)
+  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures, {runs=2})
   pm:type(dtype)
   crit:type(dtype)
 
-  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
+  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*opt.num_neighbors)
   local targets = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
@@ -339,8 +344,8 @@ end
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 --tests.gradCheckPM = gradCheckPM
-tests.gradCheckCrit = gradCheckCrit
---tests.gradCheck = gradCheck
+-- tests.gradCheckCrit = gradCheckCrit
+tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam

@@ -115,16 +115,20 @@ else
   pmOpt.mult_in = opt.mult_in
   pmOpt.num_neighbors = opt.num_neighbors
   pmOpt.border_init = opt.border_init
+  local runs = 1
   if opt.num_neighbors == 2 then
     protos.pm = nn.PixelModel(pmOpt)
   elseif opt.num_neighbors == 3 then
     protos.pm = nn.PixelModel3N(pmOpt)
-  else -- 4
+  elseif opt.num_neighbors == 4 then
     protos.pm = nn.PixelModel4N(pmOpt)
+    runs = 2
+  else
+    print('the number of neighbors should be between 2 - 4')
   end
   -- criterion for the pixel model
   protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures,
-                  {policy=opt.loss_policy, val=opt.loss_decay})
+                  {policy=opt.loss_policy, val=opt.loss_decay, runs=runs })
 end
 
 -- ship everything to GPU, maybe
