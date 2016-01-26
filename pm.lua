@@ -584,10 +584,10 @@ function layer:updateOutput(input)
     local pi = self._Findex[{t, 5}]
     -- prepare the input border
     if self.border_init == 0 then
-      --if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      --if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
-      --if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-      --if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
+      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
+      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
+      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
+      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
     else
       if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
       if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
@@ -616,10 +616,10 @@ function layer:updateOutput(input)
     local pi = self._Bindex[{t, 5}]
     -- prepare the input border
     if self.border_init == 0 then
-      --if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      --if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
-      --if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-      --if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
+      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
+      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
+      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
+      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
     else
       if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
       if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end

@@ -91,6 +91,7 @@ local images = torch.Tensor(batch_size, pm.pixel_size, pm.recurrent_stride, pm.r
 ------------------ debug ------------------------
 local img = image.load('imgs/D1.png', pm.pixel_size, 'float')
 img = image.scale(img, 256, 256):resize(1, pm.pixel_size, 256, 256)
+img = img[{{}, {}, {1, pm.recurrent_stride},{1, pm.recurrent_stride}}]
 img = torch.repeatTensor(img, batch_size, 1, 1, 1)
 img = img:cuda()
 -------------------------------------------------
@@ -258,10 +259,188 @@ local function sample3n()
   print('training loss: ', train_loss_sum)
 end
 
+-- we need to cache the states of all the pixels, and go though the image twice.
+local function sample4n()
+  images = images:view(batch_size, pm.pixel_size, -1)
+  images = torch.repeatTensor(images, 1, 1, 2)
+  img = img:view(batch_size, pm.pixel_size, -1)
+  img = torch.repeatTensor(img, 1, 1, 2)
+  pm:_buildIndex()
+
+  -------------------------------The Forward Pass -----------------------------
+  local loss_sum_f = 0
+  local train_loss_sum_f = 0
+
+  local pixel
+  local gmms
+  -- loop through each timestep
+  for t=1,pm.seq_length do
+    local pixel_left, pixel_up, pixel_right, pixel_down
+    local pl, pr, pu, pd, pi
+    pl = pm._Findex[{t, 1}]
+    pu = pm._Findex[{t, 2}]
+    pr = pm._Findex[{t, 3}]
+    pd = pm._Findex[{t, 4}]
+    pi = pm._Findex[{t, 5}]
+    if pl == 0 then
+      if border == 0 then pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_left = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}]
+    end
+    if pu == 0 then
+      if border == 0 then pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_up = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}]
+    end
+    if pr == 0 then
+      if border == 0 then pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_right = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}]
+    end
+    if pd == 0 then
+      if border == 0 then pixel_down = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_down = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}]
+    end
+    -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
+    -- Need to fix this for the new model
+    local input_pixel = torch.cat(torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), pixel_down, 2)
+    local inputs = {input_pixel, unpack(states[pl])}
+    for i,v in ipairs(states[pu]) do table.insert(inputs, v) end
+    for i,v in ipairs(states[pr]) do table.insert(inputs, v) end
+    for i,v in ipairs(states[pd]) do table.insert(inputs, v) end
+    -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
+    local lsts = pm.core:forward(inputs)
+
+    -- save the state
+    states[t] = {}
+    for i=1,pm.num_state do table.insert(states[t], lsts[i]:clone()) end
+    gmms = lsts[#lsts]
+    --print(gmms)
+    -- sampling
+    local train_pixel = img[{{}, {}, pi}]:clone()
+    pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
+    --pixel = train_pixel
+    images[{{},{},pi}] = pixel
+    loss_sum_f = loss_sum_f + loss
+    train_loss_sum_f = train_loss_sum_f + train_loss
+  end
+  collectgarbage()
+
+  -- output the sampled images
+  local images_cpu = images:narrow(3, 1, pm.seq_length)
+  images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
+  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
+  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
+  for i=1,batch_size do
+    local filename = path.join('samples', i .. '_f.png')
+    image.save(filename, images_cpu[{i,{},{},{}}])
+  end
+  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
+  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+  loss_sum_f = loss_sum_f / (pm.recurrent_stride * pm.recurrent_stride)
+  train_loss_sum_f = train_loss_sum_f / (pm.recurrent_stride * pm.recurrent_stride)
+  print('forward testing loss: ', loss_sum_f)
+  print('forward training loss: ', train_loss_sum_f)
+
+  -------------------------------The Backward Pass -----------------------------
+  local loss_sum_b = 0
+  local train_loss_sum_b = 0
+
+  local pixel
+  local gmms
+  -- loop through each timestep
+  for t=pm.seq_length,1,-1 do
+    local pixel_left, pixel_up, pixel_right, pixel_down
+    local pl, pr, pu, pd, pi
+    pl = pm._Bindex[{t, 1}]
+    pu = pm._Bindex[{t, 2}]
+    pr = pm._Bindex[{t, 3}]
+    pd = pm._Bindex[{t, 4}]
+    pi = pm._Bindex[{t, 5}]
+    if pl == 0 then
+      if border == 0 then pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_left = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      if pl > pm.seq_length then pixel_left = images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
+      else pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}] end
+    end
+    if pu == 0 then
+      if border == 0 then pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_up = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      if pu > pm.seq_length then pixel_up = images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
+      else pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}] end
+    end
+    if pr == 0 then
+      if border == 0 then pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_right = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      if pr > pm.seq_length then pixel_right = images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
+      else pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}] end
+    end
+    if pd == 0 then
+      if border == 0 then pixel_down = torch.zeros(batch_size, pm.pixel_size):cuda()
+      else pixel_down = torch.rand(batch_size, pm.pixel_size):cuda() end
+    else
+      if pd > pm.seq_length then pixel_down = images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
+      else pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}] end
+    end
+    -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
+    -- Need to fix this for the new model
+    local input_pixel = torch.cat(torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), pixel_down, 2)
+    local inputs = {input_pixel, unpack(states[pl])}
+    for i,v in ipairs(states[pu]) do table.insert(inputs, v) end
+    for i,v in ipairs(states[pr]) do table.insert(inputs, v) end
+    for i,v in ipairs(states[pd]) do table.insert(inputs, v) end
+    -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
+    local lsts = pm.core:forward(inputs)
+
+    -- save the state
+    states[t+pm.seq_length] = {}
+    for i=1,pm.num_state do table.insert(states[t+pm.seq_length], lsts[i]:clone()) end
+    gmms = lsts[#lsts]
+    --print(gmms)
+
+    -- sampling
+    local train_pixel = img[{{}, {}, pi}]:clone()
+    pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
+    --pixel = train_pixel
+    images[{{},{},pi}] = pixel
+    loss_sum_b = loss_sum_b + loss
+    train_loss_sum_b = train_loss_sum_b + train_loss
+  end
+  collectgarbage()
+
+  -- output the sampled images
+  local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
+  images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
+  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
+  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
+  for i=1,batch_size do
+    local filename = path.join('samples', i .. '_b.png')
+    image.save(filename, images_cpu[{i,{},{},{}}])
+  end
+  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
+  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
+  loss_sum_b = loss_sum_b / (pm.recurrent_stride * pm.recurrent_stride)
+  train_loss_sum_b = train_loss_sum_b / (pm.recurrent_stride * pm.recurrent_stride)
+  print('backward testing loss: ', loss_sum_b)
+  print('backward training loss: ', train_loss_sum_b)
+  print('testing loss: ', (loss_sum_f + loss_sum_b) / 2)
+  print('training loss: ', (train_loss_sum_f + train_loss_sum_b) / 2)
+end
+
 if pm.num_neighbors == 2 then
   sample2n()
 elseif pm.num_neighbors == 3 then
   sample3n()
+elseif pm.num_neighbors == 4 then
+  sample4n()
 else
   print('not implemented')
 end

@@ -72,7 +72,7 @@ function crit:updateOutput(input, target)
   assert(N == N_, 'input Tensor should have the same batch size as the target')
   assert(ps == self.pixel_size, 'input dimensions of pixel do not match')
   local nm = self.num_mixtures
-  if self.LW == nil then self:_createLossWeights(input) end
+  if self.LW == nil or self.LW:size(2) ~= D then self:_createLossWeights(input) end
 
   -- decode the gmms first
   -- mean undertake no changes
