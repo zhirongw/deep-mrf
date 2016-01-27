@@ -17,7 +17,7 @@ function DataLoaderRaw:__init(opt)
   self.files = {}
   self.ids = {}
   -- read in all the filenames from the folder
-  print('listing all images in directory ' .. opt.folder_path)
+  --print('listing all images in directory ' .. opt.folder_path)
   local function isImage(f)
     local supportedExt = {'.jpg','.JPG','.jpeg','.JPEG','.png','.PNG','.ppm','.PPM'}
     for _,ext in pairs(supportedExt) do

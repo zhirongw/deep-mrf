@@ -19,7 +19,8 @@ cmd:text()
 cmd:text('Options')
 
 -- Data input settings
-cmd:option('-folder_path','SR/Train','path to the preprocessed textures')
+cmd:option('-train_path','SR/Train','path to the training data')
+cmd:option('-val_path','SR/Set14','path to the val data')
 cmd:option('-image_size',256,'resize the input image to')
 cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
@@ -51,7 +52,7 @@ cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothi
 
 -- Evaluation/Checkpointing
 cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
-cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-checkpoint_path', 'SR/models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc
@@ -80,8 +81,8 @@ end
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
-local loader = DataLoaderRaw{folder_path = opt.folder_path,
-                            img_size = opt.image_size, color = opt.color}
+local loader = DataLoaderRaw{folder_path = opt.train_path, color = opt.color}
+local val_loader = DataLoaderRaw{folder_path = opt.val_path, color = opt.color}
 
 -------------------------------------------------------------------------------
 -- Initialize the networks
@@ -158,7 +159,7 @@ local function eval_split(n)
   while i < n do
 
     -- fetch a batch of data
-    local data = loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
+    local data = val_loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
                                 patch_size = opt.patch_size, gpu = opt.gpuid, split = 'val',
                                 border = opt.border_init}
 
@@ -245,7 +246,7 @@ while true do
   if ((opt.save_checkpoint_every > 0 and iter % opt.save_checkpoint_every == 0) or iter == opt.max_iters) then
 
     -- evaluate the validation performance
-    local val_loss = eval_split(1)
+    local val_loss = eval_split(14)
     print('validation loss: ', val_loss)
     -- val_loss_history[iter] = val_loss
 
