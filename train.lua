@@ -19,7 +19,7 @@ cmd:text()
 cmd:text('Options')
 
 -- Data input settings
-cmd:option('-folder_path','','path to the preprocessed textures')
+cmd:option('-folder_path','SR/Train','path to the preprocessed textures')
 cmd:option('-image_size',256,'resize the input image to')
 cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
@@ -29,9 +29,7 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 -- Model settings
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
-cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
-cmd:option('-num_neighbors',2,'number of neighbors for each pixel')
 cmd:option('-border_init', 1, 'ways to initialize the border, 0 for zeros, 1 for random.')
 
 -- Optimization: General
@@ -106,29 +104,17 @@ else
   local pmOpt = {}
   pmOpt.pixel_size = loader:getChannelSize()
   pmOpt.rnn_size = opt.rnn_size
-  pmOpt.num_mixtures = opt.num_mixtures
   pmOpt.num_layers = opt.num_layers
   pmOpt.dropout = opt.drop_prob_pm
   pmOpt.batch_size = opt.batch_size
   pmOpt.recurrent_stride = opt.patch_size
   pmOpt.seq_length = opt.patch_size * opt.patch_size
   pmOpt.mult_in = opt.mult_in
-  pmOpt.num_neighbors = opt.num_neighbors
+  pmOpt.num_neighbors = 4
   pmOpt.border_init = opt.border_init
-  local runs = 1
-  if opt.num_neighbors == 2 then
-    protos.pm = nn.PixelModel(pmOpt)
-  elseif opt.num_neighbors == 3 then
-    protos.pm = nn.PixelModel3N(pmOpt)
-  elseif opt.num_neighbors == 4 then
-    protos.pm = nn.PixelModel4N(pmOpt)
-    runs = 2
-  else
-    print('the number of neighbors should be between 2 - 4')
-  end
+  protos.pm = nn.PixelModel4N(pmOpt)
   -- criterion for the pixel model
-  protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures,
-                  {policy=opt.loss_policy, val=opt.loss_decay, runs=runs })
+  protos.crit = nn.MSECriterion()
 end
 
 -- ship everything to GPU, maybe
@@ -137,9 +123,7 @@ if opt.gpuid >= 0 then
 end
 
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
-print('Number of pixels in the neighbor: ', opt.num_neighbors)
 print('Hidden nodes in each layer: ', opt.rnn_size)
-print('Number of mixtures for output gaussians: ', opt.num_mixtures)
 print('The input image local patch size: ', opt.patch_size)
 print('Input channel dimension: ', opt.color*2+1)
 print('Training batch size: ', opt.batch_size)
@@ -208,19 +192,19 @@ local function lossFun()
                               border = opt.border_init}
 
   -- forward the pixel model
-  local gmms = protos.pm:forward(data.pixels)
+  local pred = protos.pm:forward(data.pixels)
   --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
-  local loss = protos.crit:forward(gmms, data.targets)
+  local loss = protos.crit:forward(pred, data.targets)
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
   -- backprop criterion
-  local dgmms = protos.crit:backward(gmms, data.targets)
+  local dpred = protos.crit:backward(pred, data.targets)
   --print('Criterion time: ' .. timer:time().real .. ' seconds')
   -- backprop pixel model
-  local dpixels = protos.pm:backward(data.pixels, dgmms)
+  local dpixels = protos.pm:backward(data.pixels, dpred)
   --print('Backward time: ' .. timer:time().real .. ' seconds')
 
   -- clip gradients
@@ -258,7 +242,7 @@ while true do
   print(string.format('iter %d: %f. LR: %f', iter, losses.total_loss, learning_rate))
 
   -- save checkpoint once in a while (or on final iteration)
-  if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
+  if ((opt.save_checkpoint_every > 0 and iter % opt.save_checkpoint_every == 0) or iter == opt.max_iters) then
 
     -- evaluate the validation performance
     local val_loss = eval_split(1)
