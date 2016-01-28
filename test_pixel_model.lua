@@ -102,18 +102,19 @@ local function gradCheckPM()
   opt.num_layers = 2
   opt.dropout = 0
   opt.seq_length = 9
-  opt.batch_size = 5
+  opt.batch_size = 2
   opt.mult_in = false
   opt.num_neighbors = 4
   opt.border_init = 0
   local pm = nn.PixelModel4N(opt)
   pm:type(dtype)
 
-  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*opt.num_neighbors)
+  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*opt.num_neighbors*2)
 
   -- evaluate the analytic gradient
   local output = pm:forward(pixels)
   local w = torch.randn(output:size())
+  local ww = w:clone()
   -- generate random weighted sum criterion
   local loss = torch.sum(torch.cmul(output, w))
   local gradOutput = w
@@ -122,7 +123,7 @@ local function gradCheckPM()
   -- create a loss function wrapper
   local function f(x)
     local output = pm:forward(x)
-    local loss = torch.sum(torch.cmul(output, w))
+    local loss = torch.sum(torch.cmul(output, ww))
     return loss
   end
 
@@ -343,9 +344,9 @@ end
 --tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
---tests.gradCheckPM = gradCheckPM
+tests.gradCheckPM = gradCheckPM
 -- tests.gradCheckCrit = gradCheckCrit
-tests.gradCheck = gradCheck
+--tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam
