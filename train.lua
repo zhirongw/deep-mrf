@@ -21,7 +21,6 @@ cmd:text('Options')
 -- Data input settings
 cmd:option('-train_path','SR/Train','path to the training data')
 cmd:option('-val_path','SR/Set14','path to the val data')
-cmd:option('-image_size',256,'resize the input image to')
 cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
 --cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
@@ -31,6 +30,7 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-border_size',0,'size of the border to ignore, i.e. only the center label will be supervised')
 cmd:option('-border_init', 1, 'ways to initialize the border, 0 for zeros, 1 for random.')
 
 -- Optimization: General
@@ -126,6 +126,7 @@ end
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
 print('Hidden nodes in each layer: ', opt.rnn_size)
 print('The input image local patch size: ', opt.patch_size)
+print('Ignoring the border of size: ', opt.border_size)
 print('Input channel dimension: ', opt.color*2+1)
 print('Training batch size: ', opt.batch_size)
 -- flatten and prepare all model parameters to a single vector.
@@ -160,13 +161,15 @@ local function eval_split(n)
 
     -- fetch a batch of data
     local data = val_loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
-                                patch_size = opt.patch_size, gpu = opt.gpuid, split = 'val',
+                                patch_size = opt.patch_size, border_size = opt.border_size, gpu = opt.gpuid,
                                 border = opt.border_init}
 
     -- forward the model to get loss
-    local gmms = protos.pm:forward(data.pixels)
+    local pred = protos.pm:forward(data.pixels)
     --print(gmms)
-    local loss = protos.crit:forward(gmms, data.targets)
+    pred = pred:view(opt.patch_size, opt.patch_size, 2, opt.batch_size, -1)
+    local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}]
+    local loss = protos.crit:forward(lpred, data.targets)
     loss_sum = loss_sum + loss
 
     i = i + 1
@@ -189,20 +192,25 @@ local function lossFun()
   -- get batch of data
   --local timer = torch.Timer()
   local data = loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
-                              patch_size = opt.patch_size, gpu = opt.gpuid, split = 'train',
+                              patch_size = opt.patch_size, border_size = opt.border_size, gpu = opt.gpuid,
                               border = opt.border_init}
 
   -- forward the pixel model
   local pred = protos.pm:forward(data.pixels)
   --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
-  local loss = protos.crit:forward(pred, data.targets)
+  pred = pred:view(opt.patch_size, opt.patch_size, 2, opt.batch_size, -1)
+  local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}]
+  local loss = protos.crit:forward(lpred, data.targets)
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
   -- backprop criterion
-  local dpred = protos.crit:backward(pred, data.targets)
+  local dlpred = protos.crit:backward(lpred, data.targets)
+  local dpred = torch.Tensor(pred:size()):type(pred:type()):fill(0)
+  dpred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}] = dlpred
+  dpred = dpred:view(-1, opt.batch_size, protos.pm.pixel_size)
   --print('Criterion time: ' .. timer:time().real .. ' seconds')
   -- backprop pixel model
   local dpixels = protos.pm:backward(data.pixels, dpred)

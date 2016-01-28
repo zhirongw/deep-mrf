@@ -71,7 +71,8 @@ end
 --]]
 function DataLoaderRaw:getBatch(opt)
   -- may possibly preprocess the image by resizing, cropping
-  local patch_size = utils.getopt(opt, 'patch_size', 7)
+  local patch_size = utils.getopt(opt, 'patch_size', 15)
+  local border_size = utils.getopt(opt, 'border_size', 5)
   local seq_length = patch_size * patch_size - 1
   local batch_size = utils.getopt(opt, 'batch_size', 5)
   -- load an image
@@ -104,7 +105,8 @@ function DataLoaderRaw:getBatch(opt)
     -- table.insert(infos, info_struct)
   end
   -- prepare the targets
-  local targets = high_patches[{{},{},{2,patch_size+1},{2,patch_size+1}}]:clone()
+  local targets = high_patches[{{},{},{2,patch_size+1},{2,patch_size+1}}]
+  targets = targets[{{},{},{border_size+1,patch_size-border_size},{border_size+1, patch_size-border_size}}]:clone()
   targets = targets:view(batch_size, self.nChannels, -1)
   targets = targets:permute(3, 1, 2):contiguous()
   targets = torch.repeatTensor(targets, 2, 1, 1)
