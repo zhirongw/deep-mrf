@@ -210,7 +210,6 @@ function layer:__init(opt)
   assert(self.pixel_size == 1 or self.pixel_size == 3, 'image can only have either 1 or 3 channels')
   self.rnn_size = utils.getopt(opt, 'rnn_size')
   self.num_layers = utils.getopt(opt, 'num_layers', 3)
-  self.num_mixtures = utils.getopt(opt, 'num_mixtures')
   local dropout = utils.getopt(opt, 'dropout', 0)
   -- options for Pixel Model
   self.recurrent_stride = utils.getopt(opt, 'recurrent_stride')
@@ -218,14 +217,10 @@ function layer:__init(opt)
   self.mult_in = utils.getopt(opt, 'mult_in')
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
-  if self.pixel_size == 3 then
-    self.output_size = self.num_mixtures * (3+3+3+1)
-  else
-    self.output_size = self.num_mixtures * (1+1+0+1)
-  end
+  self.output_size = self.pixel_size
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
-  self.core = LSTM.lstm3d(self.pixel_size*self.num_neighbors, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
+  self.core = LSTM.lstm3d(self.pixel_size*(self.num_neighbors+1), self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
 
@@ -439,7 +434,7 @@ function layer:__init(opt)
   self.output_size = self.pixel_size -- for euclidean loss
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
-  self.core = LSTM.lstm4d(self.pixel_size*4*2, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
+  self.core = LSTM.lstm4d(self.pixel_size*(4+1), self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
   self:_createInitState(1) -- will be lazily resized later during forward passes
   self:_buildIndex()
 end
@@ -530,7 +525,9 @@ function layer:_buildIndex()
     local pd = t + 2 * w - 1 -- down
     local pu = pd - 2 * self.recurrent_stride -- upward pixel always in the forwad table
     pd = pd + sl -- downward pixel always in the backward table
-    if h == self.recurrent_stride or pd > 2 * sl then pd = 0 end
+    local pi = t + sl
+    if h % 2 == 0 then pi = pd - self.recurrent_stride end
+    if pd > 2 * sl then pd = 0 end
     if h == 1 then pu = 0 end
     local pl -- left
     if h % 2 == 0 then pl = t + 1 + sl if w == 1 or pl > 2 * sl then pl = 0 end end
@@ -538,8 +535,6 @@ function layer:_buildIndex()
     local pr -- right
     if h % 2 == 1 then pr = t + 1 + sl if w == 1 or pr > 2 * sl then pr = 0 end end
     if h % 2 == 0 then pr = t - 1 if w == self.recurrent_stride then pr = 0 end end
-    local pi = t + sl
-    if h % 2 == 0 then pi = pd - self.recurrent_stride end
     self._Bindex[{t, 1}] = pl
     self._Bindex[{t, 2}] = pu
     self._Bindex[{t, 3}] = pr

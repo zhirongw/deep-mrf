@@ -19,8 +19,8 @@ cmd:text()
 cmd:text('Options')
 
 -- Data input settings
-cmd:option('-train_path','SR/Train','path to the training data')
-cmd:option('-val_path','SR/Set14','path to the val data')
+cmd:option('-train_path','../../pixel/SR/train_ycb.mat','path to the training data')
+cmd:option('-val_path','../../pixel/SR/val_ycb.mat','path to the val data')
 cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
 --cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
@@ -32,9 +32,10 @@ cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-border_size',0,'size of the border to ignore, i.e. only the center label will be supervised')
 cmd:option('-border_init', 1, 'ways to initialize the border, 0 for zeros, 1 for random.')
+cmd:option('-num_neighbors', 4, 'Number of neighbors in the pixel model.')
 
 -- Optimization: General
-cmd:option('-max_iters', 20000, 'max number of iterations to run for (-1 = run forever)')
+cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-batch_size',32,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
@@ -96,8 +97,7 @@ if string.len(opt.start_from) > 0 then
   protos = loaded_checkpoint.protos
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
-  protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures
-                  {policy=loaded_checkpoint.opt.loss_policy, val=loaded_checkpoint.opt.loss_decay}) -- not in checkpoints, create manually
+  protos.crit = nn.MSECriterion()
   iter = loaded_checkpoint.iter
 else
   -- create protos from scratch
@@ -111,9 +111,15 @@ else
   pmOpt.recurrent_stride = opt.patch_size
   pmOpt.seq_length = opt.patch_size * opt.patch_size
   pmOpt.mult_in = opt.mult_in
-  pmOpt.num_neighbors = 4
+  pmOpt.num_neighbors = opt.num_neighbors
   pmOpt.border_init = opt.border_init
-  protos.pm = nn.PixelModel4N(pmOpt)
+  if pmOpt.num_neighbors == 3 then
+    protos.pm = nn.PixelModel3N(pmOpt)
+  elseif pmOpt.num_neighbors == 4 then
+    protos.pm = nn.PixelModel4N(pmOpt)
+  else
+    print('undefined')
+  end
   -- criterion for the pixel model
   protos.crit = nn.MSECriterion()
 end
@@ -127,7 +133,7 @@ print('Training a 2D LSTM with number of layers: ', opt.num_layers)
 print('Hidden nodes in each layer: ', opt.rnn_size)
 print('The input image local patch size: ', opt.patch_size)
 print('Ignoring the border of size: ', opt.border_size)
-print('Input channel dimension: ', opt.color*2+1)
+print('Input channel dimension: ', loader:getChannelSize())
 print('Training batch size: ', opt.batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
@@ -167,7 +173,7 @@ local function eval_split(n)
     -- forward the model to get loss
     local pred = protos.pm:forward(data.pixels)
     --print(gmms)
-    pred = pred:view(opt.patch_size, opt.patch_size, 2, opt.batch_size, -1)
+    pred = pred:view(opt.patch_size, opt.patch_size, opt.num_neighbors-2, opt.batch_size, -1)
     local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}]
     local loss = protos.crit:forward(lpred, data.targets)
     loss_sum = loss_sum + loss
@@ -199,7 +205,7 @@ local function lossFun()
   local pred = protos.pm:forward(data.pixels)
   --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
-  pred = pred:view(opt.patch_size, opt.patch_size, 2, opt.batch_size, -1)
+  pred = pred:view(opt.patch_size, opt.patch_size, opt.num_neighbors-2, opt.batch_size, -1)
   local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}]
   local loss = protos.crit:forward(lpred, data.targets)
 

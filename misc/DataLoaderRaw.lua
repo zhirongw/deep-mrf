@@ -5,6 +5,7 @@ Only used at test time.
 ]]--
 
 local utils = require 'misc.utils'
+local matio = require 'matio'
 require 'lfs'
 require 'image'
 
@@ -12,46 +13,31 @@ local DataLoaderRaw = torch.class('DataLoaderRaw')
 
 function DataLoaderRaw:__init(opt)
   --- dataLoader of about 100 texture images
-  print('DataLoaderRaw loading images from folder: ', opt.folder_path)
-
-  self.files = {}
-  self.ids = {}
-  -- read in all the filenames from the folder
-  --print('listing all images in directory ' .. opt.folder_path)
-  local function isImage(f)
-    local supportedExt = {'.jpg','.JPG','.jpeg','.JPEG','.png','.PNG','.ppm','.PPM'}
-    for _,ext in pairs(supportedExt) do
-      local _, end_idx =  f:find(ext)
-      if end_idx and end_idx == f:len() then
-        return true
-      end
-    end
-    return false
-  end
-  local n = 1
-  for file in paths.files(opt.folder_path, isImage) do
-    local fullpath = path.join(opt.folder_path, file)
-    table.insert(self.files, fullpath)
-    table.insert(self.ids, tostring(n)) -- just order them sequentially
-    n=n+1
-  end
-
-  self.N = #self.files
+  print('DataLoaderRaw loading images from database: ', opt.folder_path)
+  data = matio.load(opt.folder_path, 'data')
+  self.N = data['num'][{1,1}]
   print('DataLoaderRaw found ' .. self.N .. ' images')
 
   self.highres = {}
   self.lowres = {}
-  self.kernel = image.gaussian({size=5, sigma=1, normalize=true})
-  if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end
+  self.nChannels = 3
 
   for i=1,self.N do
-    local img = image.load(self.files[i], self.nChannels, 'float')
-    local blurred = image.convolve(img, self.kernel, 'same')
-    local resized = image.scale(blurred, math.ceil(blurred:size(3)/3), math.ceil(blurred:size(2)/3), 'bicubic')
-    local lowres = image.scale(resized, img:size(3), img:size(2), 'bicubic')
-    self.highres[i] = img
+    local highres = data['highres'][i]:type('torch.FloatTensor'):div(255)
+    local lowres = data['lowres'][i]:type('torch.FloatTensor')
+    if lowres:nDimension() == 2 then
+      self.nChannels = 1
+      highres = highres[{{},{},1}]:clone()
+      highres = highres:resize(1, highres:size(1), highres:size(2))
+      lowres = lowres:resize(1, lowres:size(1), lowres:size(2))
+    else
+      highres = highres:permute(3,1,2)
+      lowres = lowres:permute(3,1,2)
+    end
+    self.highres[i] = highres
     self.lowres[i] = lowres
   end
+  data = nil -- free it
   self.iterator = 1
 end
 
@@ -82,12 +68,11 @@ function DataLoaderRaw:getBatch(opt)
   if self.iterator > self.N then self.iterator = 1 end
 
   -- two potential schemes, initialize with a border of one pixel in both directions.
-  local low_patches, high_patches
+  local low_patches = torch.zeros(batch_size, self.nChannels, patch_size, patch_size)
+  local high_patches
   if opt.border == 0 then
-    low_patches = torch.zeros(batch_size, self.nChannels, patch_size+2, patch_size+2)
     high_patches = torch.zeros(batch_size, self.nChannels, patch_size+2, patch_size+2)
   else
-    low_patches = torch.rand(batch_size, self.nChannels, patch_size+2, patch_size+2)
     high_patches = torch.rand(batch_size, self.nChannels, patch_size+2, patch_size+2)
   end
 
@@ -97,7 +82,7 @@ function DataLoaderRaw:getBatch(opt)
     local w = torch.random(1, highres:size(3)-patch_size+1)
     -- put the patch in the center.
     high_patches[{i,{},{2,patch_size+1},{2,patch_size+1}}] = highres[{{}, {h, h+patch_size-1}, {w, w+patch_size-1}}]
-    low_patches[{i,{},{2,patch_size+1},{2,patch_size+1}}] = lowres[{{}, {h, h+patch_size-1}, {w, w+patch_size-1}}]
+    low_patches[i] = lowres[{{}, {h, h+patch_size-1}, {w, w+patch_size-1}}]
     -- and record associated info as well
     -- local info_struct = {}
     -- info_struct.id = self.ids[ri]
@@ -109,7 +94,9 @@ function DataLoaderRaw:getBatch(opt)
   targets = targets[{{},{},{border_size+1,patch_size-border_size},{border_size+1, patch_size-border_size}}]:clone()
   targets = targets:view(batch_size, self.nChannels, -1)
   targets = targets:permute(3, 1, 2):contiguous()
-  targets = torch.repeatTensor(targets, 2, 1, 1)
+  if opt.num_neighbors == 4 then
+    targets = torch.repeatTensor(targets, 2, 1, 1)
+  end
   -- prepare the inputs. -n1, left, n2, up, n3, right, n4 down.
   local n1, n2, n3, n4, high_inputs, low_inputs
   n1 = high_patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()
@@ -121,24 +108,18 @@ function DataLoaderRaw:getBatch(opt)
   n3 = high_patches[{{},{},{2,patch_size+1},{3,patch_size+2}}]:clone()
   n3 = n3:view(batch_size, self.nChannels, -1)
   n3 = n3:permute(3, 1, 2)
-  n4 = high_patches[{{},{},{3,patch_size+2},{2,patch_size+1}}]:clone()
-  n4 = n4:view(batch_size, self.nChannels, -1)
-  n4 = n4:permute(3, 1, 2)
-  high_inputs = torch.cat({n1, n2, n3, n4}, 3)
+  if opt.num_neighbors == 3 then
+    high_inputs = torch.cat({n1, n2, n3}, 3)
+  elseif opt.num_neighbors == 4 then
+    n4 = high_patches[{{},{},{3,patch_size+2},{2,patch_size+1}}]:clone()
+    n4 = n4:view(batch_size, self.nChannels, -1)
+    n4 = n4:permute(3, 1, 2)
+    high_inputs = torch.cat({n1, n2, n3, n4}, 3)
+  end
 
-  n1 = low_patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()
-  n1 = n1:view(batch_size, self.nChannels, -1)
-  n1 = n1:permute(3, 1, 2)
-  n2 = low_patches[{{},{},{1,patch_size},{2,patch_size+1}}]:clone()
-  n2 = n2:view(batch_size, self.nChannels, -1)
-  n2 = n2:permute(3, 1, 2)
-  n3 = low_patches[{{},{},{2,patch_size+1},{3,patch_size+2}}]:clone()
-  n3 = n3:view(batch_size, self.nChannels, -1)
-  n3 = n3:permute(3, 1, 2)
-  n4 = low_patches[{{},{},{3,patch_size+2},{2,patch_size+1}}]:clone()
-  n4 = n4:view(batch_size, self.nChannels, -1)
-  n4 = n4:permute(3, 1, 2)
-  low_inputs = torch.cat({n1, n2, n3, n4}, 3)
+  low_patches = low_patches:view(batch_size, self.nChannels, -1)
+  local low_inputs = low_patches:permute(3, 1, 2)
+
   local inputs = torch.cat(high_inputs, low_inputs)
 
   local data = {}
