@@ -68,4 +68,24 @@ function utils.average_values(t)
   return vsum / n
 end
 
+-- convert ycrcb2rgb, formula from wikipedia: https://en.wikipedia.org/wiki/YCbCr
+-- assumes img is divided by 255 already, need to check with matlab implementation
+function utils.ycbcr2rgb(img)
+  local const = 255 / 112.0
+  local ycc = img:clone()
+  ycc[1]:add(-16/255):mul(255/219)
+  ycc[2]:add(-128/255)
+  ycc[3]:add(-128/255)
+  local rgb = ycc:clone()
+  rgb[2] = ycc[1]
+  rgb[3] = ycc[1]
+
+  rgb[1]:add(torch.mul(ycc[3], 0.701*const))
+  rgb[2]:add(-1, torch.mul(ycc[2], 0.886*const*0.114/0.587))
+  rgb[2]:add(-1, torch.mul(ycc[3], 0.701*const*0.299/0.587))
+  rgb[3]:add(torch.mul(ycc[2], 0.886*const))
+
+  return rgb
+end
+
 return utils

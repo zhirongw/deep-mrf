@@ -17,26 +17,28 @@ function DataLoaderRaw:__init(opt)
   data = matio.load(opt.folder_path, 'data')
   self.N = data['num'][{1,1}]
   print('DataLoaderRaw found ' .. self.N .. ' images')
+  local ycb = data['ycb'][{1,1}]
+  if ycb == 1 then self.nChannels = 1 else elf.nChannels = 3 end
 
   self.highres = {}
   self.lowres = {}
-  self.nChannels = 3
 
+  bicubic_loss = 0
   for i=1,self.N do
     local highres = data['highres'][i]:type('torch.FloatTensor'):div(255)
     local lowres = data['lowres'][i]:type('torch.FloatTensor')
-    if lowres:nDimension() == 2 then
-      self.nChannels = 1
-      highres = highres[{{},{},1}]:clone()
-      highres = highres:resize(1, highres:size(1), highres:size(2))
-      lowres = lowres:resize(1, lowres:size(1), lowres:size(2))
-    else
-      highres = highres:permute(3,1,2)
-      lowres = lowres:permute(3,1,2)
+    if self.nChannels == 1 then -- only work Y component of YCrCb
+      highres = highres[{{1},{},{}}]:clone()
+      lowres = lowres[{{1},{},{}}]:clone()
     end
     self.highres[i] = highres
     self.lowres[i] = lowres
+    local diff = torch.csub(highres,lowres)
+    diff = diff:cmul(diff)
+    bicubic_loss = bicubic_loss + torch.mean(diff)
   end
+  bicubic_loss = bicubic_loss / 2 / self.N
+  print('bicubic baseline is : ', bicubic_loss)
   data = nil -- free it
   self.iterator = 1
 end

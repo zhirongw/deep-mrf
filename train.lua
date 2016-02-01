@@ -31,7 +31,8 @@ cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each la
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-border_size',0,'size of the border to ignore, i.e. only the center label will be supervised')
-cmd:option('-border_init', 1, 'ways to initialize the border, 0 for zeros, 1 for random.')
+cmd:option('-border_init', 0, 'ways to initialize the border, 0 for zeros, 1 for random.')
+cmd:option('-input_shift', 1, 'shift the input by a constant, should get better performance.')
 cmd:option('-num_neighbors', 4, 'Number of neighbors in the pixel model.')
 
 -- Optimization: General
@@ -82,8 +83,8 @@ end
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
-local loader = DataLoaderRaw{folder_path = opt.train_path, color = opt.color}
-local val_loader = DataLoaderRaw{folder_path = opt.val_path, color = opt.color}
+local loader = DataLoaderRaw{folder_path = opt.train_path, shift = opt.input_shift}
+local val_loader = DataLoaderRaw{folder_path = opt.val_path, shift = opt.input_shift}
 
 -------------------------------------------------------------------------------
 -- Initialize the networks
@@ -304,7 +305,7 @@ while true do
   -- stopping criterions
   if iter % 10 == 0 then collectgarbage() end -- good idea to do this once in a while, i think
   if loss0 == nil then loss0 = losses.total_loss end
-  if losses.total_loss > loss0 * 20 then
+  if losses.total_loss > loss0 * 2000 then
     print('loss seems to be exploding, quitting.')
     break
   end

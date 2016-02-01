@@ -5,9 +5,8 @@ require 'image'
 -- local imports
 require 'pm'
 require 'gmms'
+local matio = require 'matio'
 local utils = require 'misc.utils'
---require 'misc.DataLoader'
-require 'misc.DataLoaderRaw'
 local net_utils = require 'misc.net_utils'
 
 -------------------------------------------------------------------------------
@@ -26,7 +25,7 @@ cmd:option('-batch_size', 1, 'if > 0 then overrule, otherwise load from checkpoi
 cmd:option('-sample_max', 1, '1 = sample argmax words. 0 = sample from distributions.')
 cmd:option('-beam_size', 2, 'used when sample_max = 1, indicates number of beams in beam search. Usually 2 or 3 works well. More is not better. Set this to 1 for faster runtime but a bit worse performance.')
 -- For evaluation on a folder of images:
-cmd:option('-image_folder', 'SR/Set5', 'If this is nonempty then will predict on the images in this folder path')
+cmd:option('-test_path', '../../pixel/SR/train_ycb.mat', 'If this is nonempty then will predict on the images in this folder path')
 cmd:option('-image_root', '', 'In case the image paths have to be preprended with a root path to an image folder')
 -- For evaluation on MSCOCO images from some split:
 cmd:option('-split', 'test', 'if running on MSCOCO images, which split to use: val|test|train')
@@ -64,6 +63,8 @@ if opt.batch_size == 0 then batch_size = checkpoint.opt.batch_size end
 local protos = checkpoint.protos
 local patch_size = checkpoint.opt['patch_size']
 local border = checkpoint.opt['border_init']
+local shift = checkpoint.opt['input_shift']
+if shift == nil then shift = 0 end
 crit = nn.MSECriterion()
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
@@ -84,17 +85,19 @@ end
 batch_size = 1 -- now, We will force to evaluate one image per time.
 -------------------------------------------------------------------------------
 
-local function sample3n(lowres, gt, filename)
+local function sample3n(lowres, gt)
   local states = {[0]=init_state}
   local height = lowres:size(2)
   local width = lowres:size(3)
-  pm.recurrent_stride = height
+  pm.recurrent_stride = width
   pm.seq_length = height * width
 
+  if pm.pixel_size == 1 then lowres = lowres[1]:clone() end
   lowres_input = lowres:view(batch_size, pm.pixel_size, height, width)
   lowres_input = lowres_input:cuda()
 
   images = torch.Tensor(batch_size, pm.pixel_size, height, width):cuda()
+  if pm.pixel_size == 1 then gt = gt[1]:clone() end
   gt = gt:view(batch_size, pm.pixel_size, height, width)
   gt = gt:cuda()
 
@@ -145,7 +148,7 @@ local function sample3n(lowres, gt, filename)
       -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
       -- Need to fix this for the new model
       local highres_input = torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2)
-      local inputs = {torch.cat(highres_input, lowres_input), unpack(states[pl])}
+      local inputs = {torch.cat(highres_input, lowres_input[{{},{},h,ww}]), unpack(states[pl])}
       -- insert the states[t-1,t]
       for i,v in ipairs(states[pu]) do table.insert(inputs, v) end
       -- insert the states[t,t+1]
@@ -161,24 +164,22 @@ local function sample3n(lowres, gt, filename)
       -- sampling
       local train_pixel = gt[{{}, {}, h, ww}]:clone()
       loss = crit:forward(pixel, train_pixel)
-      --pixel = train_pixel
+      pixel = train_pixel
       images[{{},{},h,ww}] = pixel
       loss_sum = loss_sum + loss
     end
     collectgarbage()
   end
 
-  -- output the sampled images
-  local images_cpu = images:float():view(batch_size, pm.pixel_size, h, w)
-  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
-  image.save(filename.."_out.png", images_cpu[{1,{},{},{}}])
   loss_sum = loss_sum / pm.seq_length
   print('loss: ', loss_sum)
-
+  -- output the sampled images
+  local images_cpu = images:float():view(batch_size, pm.pixel_size, height, width)
+  return images_cpu
 end
 
 -- we need to cache the states of all the pixels, and go though the image twice.
-local function sample4n(lowres, gt, filename)
+local function sample4n(lowres, gt)
   local states = {[0]=init_state}
 
   local h = lowres:size(2)
@@ -187,31 +188,15 @@ local function sample4n(lowres, gt, filename)
   pm.seq_length = h * w
   pm:_buildIndex()
 
-  if border == 0 then
-    lowres_ex = torch.zeros(batch_size, pm.pixel_size, h+2, w+2)
-  else
-    lowres_ex = torch.rand(batch_size, pm.pixel_size, h+2, w+2)
-  end
-  lowres_ex[{{},{},{2,h+1},{2,w+1}}] = lowres
-  local n1, n2, n3, n4
-  n1 = lowres_ex[{{},{},{2,h+1},{1,w}}]:clone()
-  n1 = n1:view(batch_size, pm.pixel_size, -1)
-  n1 = n1:permute(3, 1, 2)
-  n2 = lowres_ex[{{},{},{1,h},{2,w+1}}]:clone()
-  n2 = n2:view(batch_size, pm.pixel_size, -1)
-  n2 = n2:permute(3, 1, 2)
-  n3 = lowres_ex[{{},{},{2,h+1},{3,w+2}}]:clone()
-  n3 = n3:view(batch_size, pm.pixel_size, -1)
-  n3 = n3:permute(3, 1, 2)
-  n4 = lowres_ex[{{},{},{3,h+2},{2,w+1}}]:clone()
-  n4 = n4:view(batch_size, pm.pixel_size, -1)
-  n4 = n4:permute(3, 1, 2)
-  lowres_input = torch.cat({n1, n2, n3, n4}, 3)
+  if pm.pixel_size == 1 then lowres = lowres[1]:clone() end
+  lowres_input = lowres:view(batch_size, pm.pixel_size, h*w)
+  lowres_input = lowres_input:permute(3, 1, 2)
   lowres_input = lowres_input:cuda()
   lowres_input = torch.repeatTensor(lowres_input, 2, 1, 1)
 
   images = torch.Tensor(batch_size, pm.pixel_size, h*w):cuda()
   images = torch.repeatTensor(images, 1, 1, 2)
+  if pm.pixel_size == 1 then gt = gt[1]:clone() end
   gt = gt:view(batch_size, pm.pixel_size, h*w)
   gt = torch.repeatTensor(gt, 1, 1, 2)
   gt = gt:cuda()
@@ -351,27 +336,62 @@ local function sample4n(lowres, gt, filename)
   end
   collectgarbage()
 
-  -- output the sampled images
-  local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
-  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
-  image.save(filename.."_f.png", images_cpu[{1,{},1,{},{}}])
-  image.save(filename.."_b.png", images_cpu[{1,{},2,{},{}}])
   loss_sum_b = loss_sum_b / pm.seq_length
   print('backward loss: ', loss_sum_b)
   print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
+  -- output the sampled images
+  local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
+  return images_cpu
 end
 
-local loader = DataLoaderRaw{folder_path = opt.image_folder, color = 1}
-for i=2,loader.N do
-  print(loader.files[i])
-  local img = image.load(loader.files[i], loader.nChannels, 'float')
-  local blurred = image.convolve(img, loader.kernel, 'same')
-  local resized = image.scale(blurred, math.ceil(blurred:size(3)/3), math.ceil(blurred:size(2)/3), 'bicubic')
-  local lowres = image.scale(resized, img:size(3), img:size(2), 'bicubic')
-  image.save(string.format('SR/%d_lowres.png', i), lowres)
+local data = matio.load(opt.test_path, 'data')
+local N = data['num'][{1,1}]
+for i=1,N do
+  local highres = data['highres'][i]:type('torch.FloatTensor'):div(255)
+  local lowres = data['lowres'][i]:type('torch.FloatTensor')
+  local lowres_rgb = utils.ycbcr2rgb(lowres)
+  lowres_rgb = lowres_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
+  image.save(string.format('SR/%d_lowres.png', i), lowres_rgb)
+  highres:add(shift)
+  lowres:add(shift)
   if pm.num_neighbors == 3 then
-    sample3n(lowres, img, string.format('SR/%d', i))
+    local out = sample3n(lowres, highres)
+    out:add(-shift)
+    local pred
+    if pm.pixel_size == 1 then
+      pred = lowres
+      pred[1] = out[1]
+    else
+      pred = out
+    end
+    local pred_rgb = utils.ycbcr2rgb(pred)
+    pred_rgb = pred_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
+    image.save("SR/"..i.."_pred.png", pred_rgb)
+
   elseif pm.num_neighbors == 4 then
-    sample4n(lowres, img, string.format('SR/%d', i))
+    local out = sample4n(lowres, highres)
+    out:add(-shift)
+    if pm.pixel_size == 1 then
+      local pred_rgb
+      pred = lowres:clone()
+      pred[1] = out[{1,{},1,{},{}}]
+      pred_rgb = utils.ycbcr2rgb(pred)
+      pred_rgb = pred_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
+      image.save("SR/"..i.."_f.png", pred_rgb)
+      pred = lowres:clone()
+      pred[1] = out[{1,{},2,{},{}}]
+      pred_rgb = utils.ycbcr2rgb(pred)
+      pred_rgb = pred_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
+      image.save("SR/"..i.."_b.png", pred_rgb)
+    else
+      pred = out[{1,{},1,{},{}}]
+      pred_rgb = utils.ycbcr2rgb(pred)
+      pred_rgb = pred_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
+      image.save("SR/"..i.."_f.png", pred_rgb)
+      pred = out[{1,{},2,{},{}}]
+      pred_rgb = utils.ycbcr2rgb(pred)
+      pred_rgb = pred_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
+      image.save("SR/"..i.."_b.png", pred_rgb)
+    end
   end
 end
