@@ -321,13 +321,9 @@ function layer:updateOutput(input)
     local pi = t
     if h % 2 == 0 then pi = pu + self.recurrent_stride end
     -- prepare the input border
-    if self.border_init == 0 then
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-    else
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-    end
+    if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = self.border_init end
+    if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.border_init end
+
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
     self._inputs[t] = {input[pi],unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t], v) end
@@ -535,7 +531,9 @@ function layer:_buildIndex()
     local pd = t + 2 * w - 1 -- down
     local pu = pd - 2 * self.recurrent_stride -- upward pixel always in the forwad table
     pd = pd + sl -- downward pixel always in the backward table
-    if h == self.recurrent_stride or pd > 2 * sl then pd = 0 end
+    local pi = t + sl
+    if h % 2 == 0 then pi = pd - self.recurrent_stride end
+    if pd > 2 * sl then pd = 0 end
     if h == 1 then pu = 0 end
     local pl -- left
     if h % 2 == 0 then pl = t + 1 + sl if w == 1 or pl > 2 * sl then pl = 0 end end
@@ -543,8 +541,6 @@ function layer:_buildIndex()
     local pr -- right
     if h % 2 == 1 then pr = t + 1 + sl if w == 1 or pr > 2 * sl then pr = 0 end end
     if h % 2 == 0 then pr = t - 1 if w == self.recurrent_stride then pr = 0 end end
-    local pi = t + sl
-    if h % 2 == 0 then pi = pd - self.recurrent_stride end
     self._Bindex[{t, 1}] = pl
     self._Bindex[{t, 2}] = pu
     self._Bindex[{t, 3}] = pr

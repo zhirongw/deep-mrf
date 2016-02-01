@@ -67,6 +67,8 @@ local temperature = opt.temperature
 local protos = checkpoint.protos
 local patch_size = checkpoint.opt['patch_size']
 local border = checkpoint.opt['border_init']
+local shift = checkpoint.opt['input_shift']
+if shift == nil then shift = 0 end
 protos.pm.recurrent_stride = patch_size + opt.img_size
 protos.pm.seq_length = protos.pm.recurrent_stride * protos.pm.recurrent_stride
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
@@ -152,6 +154,7 @@ local function sample2n()
   end
 
   -- output the sampled images
+  images = images:add(-shift)
   local images_cpu = images:float()
   images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
   images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
@@ -183,33 +186,21 @@ local function sample3n()
       local pixel_left, pixel_up, pixel_right
       local pl, pr, pu
       if ww == 1 or h % 2 == 0 then
-        if border == 0 then
-          pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
-        else
-          pixel_left = torch.rand(batch_size, pm.pixel_size):cuda()
-        end
+        pixel_left = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
         pl = 0
       else
         pixel_left = images[{{}, {}, h, ww-1}]
         pl = ww - 1
       end
       if ww == pm.recurrent_stride or h % 2 == 1 then
-        if border == 0 then
-          pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
-        else
-          pixel_right = torch.rand(batch_size, pm.pixel_size):cuda()
-        end
+        pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
         pr = 0
       else
         pixel_right = images[{{}, {}, h, ww+1}]
         pr = ww + 1
       end
       if h == 1 then
-        if border == 0 then
-          pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
-        else
-          pixel_up = torch.rand(batch_size, pm.pixel_size):cuda()
-        end
+        pixel_up = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
         pu = 0
       else
         pixel_up = images[{{}, {}, h-1, ww}]
@@ -232,7 +223,7 @@ local function sample3n()
       gmms = lsts[#lsts]
 
       -- sampling
-      local train_pixel = img[{{}, {}, h, ww}]:clone()
+      local train_pixel = img[{{}, {}, h, ww}]:clone():add(shift)
       pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
       --pixel = train_pixel
       images[{{},{},h,ww}] = pixel
@@ -243,6 +234,7 @@ local function sample3n()
   end
 
   -- output the sampled images
+  images = images:add(-shift)
   local images_cpu = images:float()
   images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
   images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
@@ -283,26 +275,22 @@ local function sample4n()
     pd = pm._Findex[{t, 4}]
     pi = pm._Findex[{t, 5}]
     if pl == 0 then
-      if border == 0 then pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_left = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_left = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     else
       pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}]
     end
     if pu == 0 then
-      if border == 0 then pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_up = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_up = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     else
       pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}]
     end
     if pr == 0 then
-      if border == 0 then pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_right = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     else
       pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}]
     end
     if pd == 0 then
-      if border == 0 then pixel_down = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_down = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_down = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
     else
       pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}]
     end
@@ -332,6 +320,7 @@ local function sample4n()
   collectgarbage()
 
   -- output the sampled images
+  images = images:add(-shift)
   local images_cpu = images:narrow(3, 1, pm.seq_length)
   images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
   images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
@@ -363,29 +352,25 @@ local function sample4n()
     pd = pm._Bindex[{t, 4}]
     pi = pm._Bindex[{t, 5}]
     if pl == 0 then
-      if border == 0 then pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_left = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_left = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
     else
       if pl > pm.seq_length then pixel_left = images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
       else pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}] end
     end
     if pu == 0 then
-      if border == 0 then pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_up = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_up = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
     else
       if pu > pm.seq_length then pixel_up = images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
       else pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}] end
     end
     if pr == 0 then
-      if border == 0 then pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_right = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     else
       if pr > pm.seq_length then pixel_right = images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
       else pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}] end
     end
     if pd == 0 then
-      if border == 0 then pixel_down = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_down = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_down = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     else
       if pd > pm.seq_length then pixel_down = images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
       else pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}] end
@@ -417,6 +402,7 @@ local function sample4n()
   collectgarbage()
 
   -- output the sampled images
+  images = images:add(-shift)
   local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
   images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
   images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]

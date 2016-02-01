@@ -51,7 +51,7 @@ function DataLoaderRaw:__init(opt)
     img = image.scale(img, opt.img_size)
   end
 
-  self.images[self.iterator] = img
+  self.images[self.iterator] = img:add(opt.shift)
   self.nHeight = img:size(2)
   self.nWidth = img:size(3)
 end
@@ -80,11 +80,7 @@ function DataLoaderRaw:getBatch(opt)
 
   -- two potential schemes, initialize with a border of one pixel in both directions.
   local patches
-  if opt.border == 0 then
-    patches = torch.zeros(batch_size, self.nChannels, patch_size+2, patch_size+2)
-  else
-    patches = torch.rand(batch_size, self.nChannels, patch_size+2, patch_size+2)
-  end
+  patches = torch.Tensor(batch_size, self.nChannels, patch_size+2, patch_size+2):fill(opt.border)
 
   --local infos = {}
   for i=1,batch_size do

@@ -32,7 +32,8 @@ cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-num_neighbors',2,'number of neighbors for each pixel')
-cmd:option('-border_init', 1, 'ways to initialize the border, 0 for zeros, 1 for random.')
+cmd:option('-border_init', 0, 'value to init the pixel on the border.')
+cmd:option('-input_shift', 0, 'shift the input by a constant, should get better performance.')
 
 -- Optimization: General
 cmd:option('-max_iters', 20000, 'max number of iterations to run for (-1 = run forever)')
@@ -46,7 +47,7 @@ cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 500, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-learning_rate_decay_every', 5000, 'every how many iterations thereafter to drop LR by half?')
 cmd:option('-optim_alpha',0.90,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
@@ -82,7 +83,7 @@ end
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
-local loader = DataLoaderRaw{folder_path = opt.folder_path,
+local loader = DataLoaderRaw{folder_path = opt.folder_path, shift = opt.input_shift,
                             img_size = opt.image_size, color = opt.color}
 
 -------------------------------------------------------------------------------
@@ -97,8 +98,10 @@ if string.len(opt.start_from) > 0 then
   protos = loaded_checkpoint.protos
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
-  protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures
-                  {policy=loaded_checkpoint.opt.loss_policy, val=loaded_checkpoint.opt.loss_decay}) -- not in checkpoints, create manually
+  local runs = 1
+  if protos.pm.num_neighbors == 4 then runs = 2 end
+  protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures,
+                  {policy=loaded_checkpoint.opt.loss_policy, val=loaded_checkpoint.opt.loss_decay, runs=runs}) -- not in checkpoints, create manually
   iter = loaded_checkpoint.iter
 else
   -- create protos from scratch
@@ -142,6 +145,8 @@ print('Hidden nodes in each layer: ', opt.rnn_size)
 print('Number of mixtures for output gaussians: ', opt.num_mixtures)
 print('The input image local patch size: ', opt.patch_size)
 print('Input channel dimension: ', opt.color*2+1)
+print('Input pixel shift: ', opt.input_shift)
+print('Border pixel init: ', opt.border_init)
 print('Training batch size: ', opt.batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
@@ -305,7 +310,7 @@ while true do
   -- stopping criterions
   if iter % 10 == 0 then collectgarbage() end -- good idea to do this once in a while, i think
   if loss0 == nil then loss0 = losses.total_loss end
-  if losses.total_loss > loss0 * 20 then
+  if losses.total_loss > 2000 then
     print('loss seems to be exploding, quitting.')
     break
   end
