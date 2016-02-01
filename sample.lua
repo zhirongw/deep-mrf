@@ -112,33 +112,21 @@ local function sample3n(lowres, gt)
       local pixel_left, pixel_up, pixel_right
       local pl, pr, pu
       if ww == 1 or h % 2 == 0 then
-        if border == 0 then
-          pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
-        else
-          pixel_left = torch.rand(batch_size, pm.pixel_size):cuda()
-        end
+        pixel_left = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
         pl = 0
       else
         pixel_left = images[{{}, {}, h, ww-1}]
         pl = ww - 1
       end
       if ww == pm.recurrent_stride or h % 2 == 1 then
-        if border == 0 then
-          pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
-        else
-          pixel_right = torch.rand(batch_size, pm.pixel_size):cuda()
-        end
+        pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
         pr = 0
       else
         pixel_right = images[{{}, {}, h, ww+1}]
         pr = ww + 1
       end
       if h == 1 then
-        if border == 0 then
-          pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
-        else
-          pixel_up = torch.rand(batch_size, pm.pixel_size):cuda()
-        end
+        pixel_up = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
         pu = 0
       else
         pixel_up = images[{{}, {}, h-1, ww}]
@@ -164,7 +152,7 @@ local function sample3n(lowres, gt)
       -- sampling
       local train_pixel = gt[{{}, {}, h, ww}]:clone()
       loss = crit:forward(pixel, train_pixel)
-      pixel = train_pixel
+      --pixel = train_pixel
       images[{{},{},h,ww}] = pixel
       loss_sum = loss_sum + loss
     end
@@ -359,7 +347,7 @@ for i=1,N do
     out:add(-shift)
     local pred
     if pm.pixel_size == 1 then
-      pred = lowres
+      pred = lowres:add(-shift)
       pred[1] = out[1]
     else
       pred = out

@@ -72,11 +72,7 @@ function DataLoaderRaw:getBatch(opt)
   -- two potential schemes, initialize with a border of one pixel in both directions.
   local low_patches = torch.zeros(batch_size, self.nChannels, patch_size, patch_size)
   local high_patches
-  if opt.border == 0 then
-    high_patches = torch.zeros(batch_size, self.nChannels, patch_size+2, patch_size+2)
-  else
-    high_patches = torch.rand(batch_size, self.nChannels, patch_size+2, patch_size+2)
-  end
+  high_patches = torch.Tensor(batch_size, self.nChannels, patch_size+2, patch_size+2):fill(opt.border)
 
   --local infos = {}
   for i=1,batch_size do

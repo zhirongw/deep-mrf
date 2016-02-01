@@ -316,13 +316,8 @@ function layer:updateOutput(input)
     local pi = t
     if h % 2 == 0 then pi = pu + self.recurrent_stride end
     -- prepare the input border
-    if self.border_init == 0 then
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-    else
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-    end
+    if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = self.border_init end
+    if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.border_init end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
     self._inputs[t] = {input[pi],unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t], v) end

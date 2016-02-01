@@ -31,8 +31,8 @@ cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each la
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-border_size',0,'size of the border to ignore, i.e. only the center label will be supervised')
-cmd:option('-border_init', 0, 'ways to initialize the border, 0 for zeros, 1 for random.')
-cmd:option('-input_shift', 1, 'shift the input by a constant, should get better performance.')
+cmd:option('-border_init', 0, 'value to init pixels on the border.')
+cmd:option('-input_shift', 0, 'shift the input by a constant, should get better performance.')
 cmd:option('-num_neighbors', 4, 'Number of neighbors in the pixel model.')
 
 -- Optimization: General
@@ -135,6 +135,8 @@ print('Hidden nodes in each layer: ', opt.rnn_size)
 print('The input image local patch size: ', opt.patch_size)
 print('Ignoring the border of size: ', opt.border_size)
 print('Input channel dimension: ', loader:getChannelSize())
+print('Input pixel shift: ', opt.input_shift)
+print('Input border init: ', opt.border_init)
 print('Training batch size: ', opt.batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
