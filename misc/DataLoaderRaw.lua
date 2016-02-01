@@ -31,8 +31,8 @@ function DataLoaderRaw:__init(opt)
       highres = highres[{{1},{},{}}]:clone()
       lowres = lowres[{{1},{},{}}]:clone()
     end
-    self.highres[i] = highres
-    self.lowres[i] = lowres
+    self.highres[i] = highres:add(opt.shift)
+    self.lowres[i] = lowres:add(opt.shift)
     local diff = torch.csub(highres,lowres)
     diff = diff:cmul(diff)
     bicubic_loss = bicubic_loss + torch.mean(diff)
