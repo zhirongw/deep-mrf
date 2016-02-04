@@ -43,6 +43,8 @@ cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 cmd:option('-loss_policy', 'exp', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
+cmd:option('-noise', 0, 'input perturbation by adding noise')
+
 -- Optimization: for the Pixel Model
 cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',1e-4,'learning rate')
@@ -54,7 +56,7 @@ cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothi
 
 -- Evaluation/Checkpointing
 cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
-cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-checkpoint_path', '~/pixel/models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc
@@ -181,7 +183,7 @@ local function eval_split(n)
     -- fetch a batch of data
     local data = loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
                                 patch_size = opt.patch_size, gpu = opt.gpuid, split = 'val',
-                                border = opt.border_init}
+                                border = opt.border_init, noise = opt.noise}
 
     -- forward the model to get loss
     local gmms = protos.pm:forward(data.pixels)
@@ -210,7 +212,7 @@ local function lossFun()
   --local timer = torch.Timer()
   local data = loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
                               patch_size = opt.patch_size, gpu = opt.gpuid, split = 'train',
-                              border = opt.border_init}
+                              border = opt.border_init, noise = opt.noise}
 
   -- forward the pixel model
   local gmms = protos.pm:forward(data.pixels)

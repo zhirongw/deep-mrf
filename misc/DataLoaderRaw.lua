@@ -128,6 +128,10 @@ function DataLoaderRaw:getBatch(opt)
   local data = {}
   data.pixels = inputs
   data.targets = targets
+  if opt.noise > 0 then
+    data.pixels:add(torch.randn(inputs:size())*opt.noise)
+  end
+  --data.targets:add(torch.randn(targets:size())*0.01)
   if opt.gpu >= 0 then
     data.pixels = data.pixels:cuda()
     data.targets = data.targets:cuda()
