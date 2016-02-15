@@ -400,7 +400,7 @@ function layer:updateGradInput(input, gradOutput)
       end
     end
   end
-
+  --exit()
   return self.gradInput
 end
 
@@ -426,6 +426,7 @@ function layer:__init(opt)
   self.mult_in = utils.getopt(opt, 'mult_in')
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
+  self.output_back = utils.getopt(opt, 'output_back')
   self.output_size = self.pixel_size -- for euclidean loss
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
@@ -553,32 +554,24 @@ function layer:updateOutput(input)
   assert(input:size(1) == sl)
   local batch_size = input:size(2)
   -- output is a table, indexed by the seq index.
+  self.output = torch.Tensor(sl, batch_size, self.output_size):type(input:type())
   input = torch.repeatTensor(input, 2, 1, 1)
-  self.output = torch.Tensor(2*sl, batch_size, self.output_size):type(input:type())
 
   self:_createInitState(batch_size)
 
   self._states = {[0] = self.init_state}
+  self._inter = torch.zeros(self.output:size()):type(self.output:type())
   self._inputs = {}
   -- forward loop through the image pixels
+  -- the seq info will never be available for the first sweep.
+  input[{{1,sl}, {}, {1, 4*self.pixel_size}}] = self.border_init
   for t=1,sl do
     local pl = self._Findex[{t, 1}]
     local pu = self._Findex[{t, 2}]
     local pr = self._Findex[{t, 3}]
     local pd = self._Findex[{t, 4}]
     local pi = self._Findex[{t, 5}]
-    -- prepare the input border
-    if self.border_init == 0 then
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
-    else
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-    end
+    -- prepare the input border. First round will never be available.
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
     self._inputs[t] = {input[pi],unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t], v) end
@@ -589,7 +582,7 @@ function layer:updateOutput(input)
     -- save the state
     self._states[t] = {}
     for i=1,self.num_state do table.insert(self._states[t], lsts[i]) end
-    self.output[pi] = lsts[#lsts]
+    self._inter[pi] = lsts[#lsts]
   end
   -- backward loop through the image pixels
   -- states in all four directions will be available
@@ -599,23 +592,23 @@ function layer:updateOutput(input)
     local pr = self._Bindex[{t, 3}]
     local pd = self._Bindex[{t, 4}]
     local pi = self._Bindex[{t, 5}]
-    -- prepare the input border
-    if self.border_init == 0 then
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
+    if not self.output_back then
+      -- pixel no connected from the first sweep.
+      if pl <= sl then input[{pi, {}, {1, self.pixel_size}}] = self.border_init end
+      if pu <= sl then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = self.border_init end
+      if pr <= sl then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.border_init end
+      if pd <= sl then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self.border_init end
     else
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
+      -- pixel connected from the the first sweep.
+      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = self.border_init end
+      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = self.border_init end
+      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.border_init end
+      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self.border_init end
+      if pl <= sl and pl > 0 then input[{pi, {}, {1, self.pixel_size}}] = self._inter[self._Findex[{pl,5}]] end
+      if pu <= sl and pu > 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = self._inter[self._Findex[{pu,5}]] end
+      if pr <= sl and pr > 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self._inter[self._Findex[{pr,5}]] end
+      if pd <= sl and pd > 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self._inter[self._Findex[{pd,5}]] end
     end
-    -- if the neighboring state is from the forward pass, the input should also be.
-    if pl <= sl and pl > 0 then input[{pi, {}, {1, self.pixel_size}}] = self.output[self._Findex[{pl,5}]] end
-    if pu <= sl and pu > 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = self.output[self._Findex[{pu,5}]] end
-    if pr <= sl and pr > 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.output[self._Findex[{pr,5}]] end
-    if pd <= sl and pd > 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self.output[self._Findex[{pd,5}]] end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
     self._inputs[t+sl] = {input[pi],unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t+sl], v) end
@@ -626,7 +619,7 @@ function layer:updateOutput(input)
     -- save the state
     self._states[t+sl] = {}
     for i=1,self.num_state do table.insert(self._states[t+sl], lsts[i]) end
-    self.output[pi] = lsts[#lsts]
+    self.output[pi-sl] = lsts[#lsts]
   end
   return self.output
 end
@@ -651,6 +644,7 @@ function layer:updateGradInput(input, gradOutput)
   -- initialize the gradient of states all to zeros.
   -- this works when init_state is all zeros
   local _dstates = {}
+  self._dinter = torch.zeros(self._inter:size()):type(self._inter:type())
   -- the backward table
   for t=1,sl do
     local pl = self._Bindex[{t, 1}]
@@ -662,21 +656,23 @@ function layer:updateGradInput(input, gradOutput)
     if _dstates[t+sl] == nil then _dstates[t+sl] = self.init_state end
     local douts = {}
     for k=1,#_dstates[t+sl] do table.insert(douts, _dstates[t+sl][k]) end
-    table.insert(douts, gradOutput[pi])
+    table.insert(douts, gradOutput[pi-sl])
     -- backward LSTMs
     local dinputs = self.clones[t+sl]:backward(self._inputs[t+sl], douts)
 
     -- split the gradient to pixel and to state
     dgradInput[pi] = dinputs[1] -- first element is the input pixel vector
+    if self.output_back then
     -- also needs to backpropagate to the output of the forward pass
-    if pl <= sl and pl > 0 then gradOutput[self._Findex[{pl,5}]]:add(dgradInput[{pi, {}, {1, self.pixel_size}}])
-     dgradInput[{pi, {}, {1, self.pixel_size}}]:fill(0) end
-    if pu <= sl and pu > 0 then gradOutput[self._Findex[{pu,5}]]:add(dgradInput[{pi, {}, {self.pixel_size+1, 2*self.pixel_size}}])
-     dgradInput[{pi, {}, {self.pixel_size+1, 2*self.pixel_size}}]:fill(0) end
-    if pr <= sl and pr > 0 then gradOutput[self._Findex[{pr,5}]]:add(dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}])
-     dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}]:fill(0) end
-    if pd <= sl and pd > 0 then gradOutput[self._Findex[{pd,5}]]:add(dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}])
-     dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}]:fill(0) end
+      if pl <= sl and pl > 0 then self._dinter[self._Findex[{pl,5}]]:add(dgradInput[{pi, {}, {1, self.pixel_size}}])
+        dgradInput[{pi, {}, {1, self.pixel_size}}]:fill(0) end
+      if pu <= sl and pu > 0 then self._dinter[self._Findex[{pu,5}]]:add(dgradInput[{pi, {}, {self.pixel_size+1, 2*self.pixel_size}}])
+        dgradInput[{pi, {}, {self.pixel_size+1, 2*self.pixel_size}}]:fill(0) end
+      if pr <= sl and pr > 0 then self._dinter[self._Findex[{pr,5}]]:add(dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}])
+        dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}]:fill(0) end
+      if pd <= sl and pd > 0 then self._dinter[self._Findex[{pd,5}]]:add(dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}])
+        dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}]:fill(0) end
+    end
     -- copy to _dstates[t,t-1]
     if pl > 0 then
       if _dstates[pl] == nil then
@@ -726,7 +722,7 @@ function layer:updateGradInput(input, gradOutput)
     if _dstates[t] == nil then _dstates[t] = self.init_state end
     local douts = {}
     for k=1,#_dstates[t] do table.insert(douts, _dstates[t][k]) end
-    table.insert(douts, gradOutput[pi])
+    table.insert(douts, self._dinter[pi])
     -- backward LSTMs
     local dinputs = self.clones[t]:backward(self._inputs[t], douts)
 

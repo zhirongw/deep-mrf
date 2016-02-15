@@ -32,8 +32,9 @@ cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-border_size',0,'size of the border to ignore, i.e. only the center label will be supervised')
 cmd:option('-border_init', 0, 'value to init pixels on the border.')
-cmd:option('-input_shift', 0, 'shift the input by a constant, should get better performance.')
+cmd:option('-input_shift', -0.5, 'shift the input by a constant, should get better performance.')
 cmd:option('-num_neighbors', 4, 'Number of neighbors in the pixel model.')
+cmd:option('-noise', 0, 'Input perturbation noise.')
 
 -- Optimization: General
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
@@ -41,26 +42,28 @@ cmd:option('-batch_size',32,'what is the batch size in number of images per batc
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
-cmd:option('-loss_policy', 'exp', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
+cmd:option('-output_back', true, 'For 4D model, feed the output of the first sweep to the next sweep')
+cmd:option('-grad_norm', true, 'whether to normalize the gradients for each direction')
+cmd:option('-loss_policy', 'const', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 -- Optimization: for the Pixel Model
 cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 500, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.90,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-learning_rate_decay_every', 1000, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
 cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
-cmd:option('-checkpoint_path', 'SR/models', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-checkpoint_path', '~/pixel/SR/models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc
 cmd:option('-backend', 'cudnn', 'nn|cudnn')
 cmd:option('-id', '', 'an id identifying this run/job. used in cross-val and appended when writing progress files')
-cmd:option('-seed', 123, 'random number generator seed to use')
+cmd:option('-seed', 3, 'random number generator seed to use')
 cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
 
 cmd:text()
@@ -114,6 +117,7 @@ else
   pmOpt.mult_in = opt.mult_in
   pmOpt.num_neighbors = opt.num_neighbors
   pmOpt.border_init = opt.border_init
+  pmOpt.output_back = opt.output_back
   if pmOpt.num_neighbors == 3 then
     protos.pm = nn.PixelModel3N(pmOpt)
   elseif pmOpt.num_neighbors == 4 then
@@ -171,13 +175,13 @@ local function eval_split(n)
     -- fetch a batch of data
     local data = val_loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
                                 patch_size = opt.patch_size, border_size = opt.border_size, gpu = opt.gpuid,
-                                border = opt.border_init}
+                                border = opt.border_init, noise = opt.noise}
 
     -- forward the model to get loss
     local pred = protos.pm:forward(data.pixels)
     --print(gmms)
-    pred = pred:view(opt.patch_size, opt.patch_size, opt.num_neighbors-2, opt.batch_size, -1)
-    local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}]
+    pred = pred:view(opt.patch_size, opt.patch_size, opt.batch_size, -1)
+    local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
     local loss = protos.crit:forward(lpred, data.targets)
     loss_sum = loss_sum + loss
 
@@ -202,14 +206,14 @@ local function lossFun()
   --local timer = torch.Timer()
   local data = loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
                               patch_size = opt.patch_size, border_size = opt.border_size, gpu = opt.gpuid,
-                              border = opt.border_init}
+                              border = opt.border_init, noise = opt.noise}
 
   -- forward the pixel model
   local pred = protos.pm:forward(data.pixels)
   --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
-  pred = pred:view(opt.patch_size, opt.patch_size, opt.num_neighbors-2, opt.batch_size, -1)
-  local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}]
+  pred = pred:view(opt.patch_size, opt.patch_size, opt.batch_size, -1)
+  local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
   local loss = protos.crit:forward(lpred, data.targets)
 
   -----------------------------------------------------------------------------
@@ -218,7 +222,7 @@ local function lossFun()
   -- backprop criterion
   local dlpred = protos.crit:backward(lpred, data.targets)
   local dpred = torch.Tensor(pred:size()):type(pred:type()):fill(0)
-  dpred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{},{}}] = dlpred
+  dpred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}] = dlpred
   dpred = dpred:view(-1, opt.batch_size, protos.pm.pixel_size)
   --print('Criterion time: ' .. timer:time().real .. ' seconds')
   -- backprop pixel model
@@ -287,6 +291,28 @@ while true do
     -- print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
   end
 
+  --local xxx = grad_params[{{6001, 726000}}]
+  --xxx = xxx:view(6*200,3*200)
+  --print(torch.mean(torch.abs(xxx[{{},{1,200}}])))
+  --print(torch.mean(torch.abs(xxx[{{},{201,400}}])))
+  --print(torch.mean(torch.abs(xxx[{{},{401,600}}])))
+  --local yyy = params[{{6001, 726000}}]
+  --yyy = yyy:view(6*200,3*200)
+  --print(torch.mean(torch.abs(yyy[{{},{1,200}}])))
+  --print(torch.mean(torch.abs(yyy[{{},{201,400}}])))
+  --print(torch.mean(torch.abs(yyy[{{},{401,600}}])))
+  --local xxx = grad_params[{{8401, 1128400}}]
+  --xxx = xxx:view(7*200,4*200)
+  --print(torch.mean(torch.abs(xxx[{{},{1,200}}])))
+  --print(torch.mean(torch.abs(xxx[{{},{201,400}}])))
+  --print(torch.mean(torch.abs(xxx[{{},{401,600}}])))
+  --print(torch.mean(torch.abs(xxx[{{},{601,800}}])))
+  --local yyy = params[{{8401, 1128400}}]
+  --yyy = yyy:view(7*200,4*200)
+  --print(torch.mean(torch.abs(yyy[{{},{1,200}}])))
+  --print(torch.mean(torch.abs(yyy[{{},{201,400}}])))
+  --print(torch.mean(torch.abs(yyy[{{},{401,600}}])))
+  --print(torch.mean(torch.abs(yyy[{{},{601,800}}])))
   -- perform a parameter update
   if opt.optim == 'rmsprop' then
     rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)

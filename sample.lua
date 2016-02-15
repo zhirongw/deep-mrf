@@ -126,7 +126,7 @@ local function sample3n(lowres, gt)
         pr = ww + 1
       end
       if h == 1 then
-        pixel_up = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
+        pixel_up = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
         pu = 0
       else
         pixel_up = images[{{}, {}, h-1, ww}]
@@ -201,33 +201,10 @@ local function sample4n(lowres, gt)
     pr = pm._Findex[{t, 3}]
     pd = pm._Findex[{t, 4}]
     pi = pm._Findex[{t, 5}]
-    if pl == 0 then
-      if border == 0 then pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_left = torch.rand(batch_size, pm.pixel_size):cuda() end
-    else
-      pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}]
-    end
-    if pu == 0 then
-      if border == 0 then pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_up = torch.rand(batch_size, pm.pixel_size):cuda() end
-    else
-      pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}]
-    end
-    if pr == 0 then
-      if border == 0 then pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_right = torch.rand(batch_size, pm.pixel_size):cuda() end
-    else
-      pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}]
-    end
-    if pd == 0 then
-      if border == 0 then pixel_down = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_down = torch.rand(batch_size, pm.pixel_size):cuda() end
-    else
-      pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}]
-    end
+
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
-    -- Need to fix this for the new model
-    local highres_input = torch.cat(torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), pixel_down, 2)
+    -- first sweep, no seq info.
+    local highres_input = torch.Tensor(batch_size, pm.pixel_size * 4):fill(border):cuda()
     local pixel_input = torch.cat(highres_input, lowres_input[pi])
     local inputs = {pixel_input, unpack(states[pl])}
     for i,v in ipairs(states[pu]) do table.insert(inputs, v) end
@@ -266,39 +243,50 @@ local function sample4n(lowres, gt)
     pd = pm._Bindex[{t, 4}]
     pi = pm._Bindex[{t, 5}]
     if pl == 0 then
-      if border == 0 then pixel_left = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_left = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_left = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pl > pm.seq_length then
+      pixel_left = images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
     else
-      if pl > pm.seq_length then pixel_left = images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
-      else pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}] end
+      if pm.output_back then
+        pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}]
+      else
+        pixel_left = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     if pu == 0 then
-      if border == 0 then pixel_up = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_up = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_up = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pu > pm.seq_length then
+      pixel_up = images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
     else
-      if pu > pm.seq_length then pixel_up = images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
-      else pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}] end
+      if pm.output_back then
+        pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}]
+      else
+        pixel_up = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     if pr == 0 then
-      if border == 0 then pixel_right = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_right = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pr > pm.seq_length then
+      pixel_right = images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
     else
-      if pr > pm.seq_length then pixel_right = images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
-      else pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}] end
+      if pm.output_back then
+        pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}]
+      else
+        pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     if pd == 0 then
-      if border == 0 then pixel_down = torch.zeros(batch_size, pm.pixel_size):cuda()
-      else pixel_down = torch.rand(batch_size, pm.pixel_size):cuda() end
+      pixel_down = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pd > pm.seq_length then
+      pixel_down = images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
     else
-      if pd > pm.seq_length then pixel_down = images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
-      else pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}] end
+      if pm.output_back then
+        pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}]
+      else
+        pixel_down = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     local highres_input = torch.cat(torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), pixel_down, 2)
-    -- if the neighboring state is from the forward pass, the input should also be.
-    --if pl <= pm.seq_length and pl > 0 then highres_input[{pi, {}, {1, pm.pixel_size}}] = images[{{},{},pm._Findex[{pl,5}]}] end
-    --if pu <= pm.seq_length and pu > 0 then highres_input[{pi, {}, {1*pm.pixel_size+1, 2*pm.pixel_size}}] = images[{{},{},pm._Findex[{pu,5}]}] end
-    --if pr <= pm.seq_length and pr > 0 then highres_input[{pi, {}, {2*pm.pixel_size+1, 3*pm.pixel_size}}] = images[{{},{},pm._Findex[{pr,5}]}] end
-    --if pd <= pm.seq_length and pd > 0 then highres_input[{pi, {}, {3*pm.pixel_size+1, 4*pm.pixel_size}}] = images[{{},{},pm._Findex[{pd,5}]}] end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
     -- Need to fix this for the new model
     local pixel_input = torch.cat(highres_input, lowres_input[pi])
@@ -326,7 +314,7 @@ local function sample4n(lowres, gt)
 
   loss_sum_b = loss_sum_b / pm.seq_length
   print('backward loss: ', loss_sum_b)
-  print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
+  --print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
   -- output the sampled images
   local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
   return images_cpu
@@ -335,6 +323,7 @@ end
 local data = matio.load(opt.test_path, 'data')
 local N = data['num'][{1,1}]
 for i=1,N do
+  print(i)
   local highres = data['highres'][i]:type('torch.FloatTensor'):div(255)
   local lowres = data['lowres'][i]:type('torch.FloatTensor')
   local lowres_rgb = utils.ycbcr2rgb(lowres)
@@ -359,14 +348,15 @@ for i=1,N do
   elseif pm.num_neighbors == 4 then
     local out = sample4n(lowres, highres)
     out:add(-shift)
+    local pred
     if pm.pixel_size == 1 then
       local pred_rgb
-      pred = lowres:clone()
+      pred = lowres:clone():add(-shift)
       pred[1] = out[{1,{},1,{},{}}]
       pred_rgb = utils.ycbcr2rgb(pred)
       pred_rgb = pred_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
       image.save("SR/"..i.."_f.png", pred_rgb)
-      pred = lowres:clone()
+      pred = lowres:clone():add(-shift)
       pred[1] = out[{1,{},2,{},{}}]
       pred_rgb = utils.ycbcr2rgb(pred)
       pred_rgb = pred_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')

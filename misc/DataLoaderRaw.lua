@@ -92,9 +92,6 @@ function DataLoaderRaw:getBatch(opt)
   targets = targets[{{},{},{border_size+1,patch_size-border_size},{border_size+1, patch_size-border_size}}]:clone()
   targets = targets:view(batch_size, self.nChannels, -1)
   targets = targets:permute(3, 1, 2):contiguous()
-  if opt.num_neighbors == 4 then
-    targets = torch.repeatTensor(targets, 2, 1, 1)
-  end
   -- prepare the inputs. -n1, left, n2, up, n3, right, n4 down.
   local n1, n2, n3, n4, high_inputs, low_inputs
   n1 = high_patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()
@@ -117,6 +114,11 @@ function DataLoaderRaw:getBatch(opt)
 
   low_patches = low_patches:view(batch_size, self.nChannels, -1)
   local low_inputs = low_patches:permute(3, 1, 2)
+
+  if opt.noise > 0 then
+    high_inputs:add(torch.randn(high_inputs:size())*opt.noise)
+    --data.targets:add(torch.randn(targets:size())*opt.noise)
+  end
 
   local inputs = torch.cat(high_inputs, low_inputs)
 

@@ -95,7 +95,7 @@ local function gradCheckPM()
 
   local dtype = 'torch.DoubleTensor'
   local opt = {}
-  opt.pixel_size = 3
+  opt.pixel_size = 1
   opt.num_mixtures = 2
   opt.recurrent_stride = 3
   opt.rnn_size = 8
@@ -109,7 +109,7 @@ local function gradCheckPM()
   local pm = nn.PixelModel4N(opt)
   pm:type(dtype)
 
-  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*opt.num_neighbors*2)
+  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*(opt.num_neighbors+1))
 
   -- evaluate the analytic gradient
   local output = pm:forward(pixels)
@@ -203,11 +203,11 @@ local function gradCheck()
   opt.num_neighbors = 4
   opt.border_init = 0
   local pm = nn.PixelModel4N(opt)
-  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures, {runs=2})
+  local crit = nn.MSECriterion()
   pm:type(dtype)
   crit:type(dtype)
 
-  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*opt.num_neighbors)
+  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size*(opt.num_neighbors+1))
   local targets = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
@@ -344,9 +344,9 @@ end
 --tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
-tests.gradCheckPM = gradCheckPM
+--tests.gradCheckPM = gradCheckPM
 -- tests.gradCheckCrit = gradCheckCrit
---tests.gradCheck = gradCheck
+tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam
