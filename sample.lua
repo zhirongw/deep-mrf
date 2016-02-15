@@ -314,6 +314,7 @@ local function sample4n(lowres, gt)
 
   loss_sum_b = loss_sum_b / pm.seq_length
   print('backward loss: ', loss_sum_b)
+  print('Our PSNR: ', math.log10(1 / math.sqrt(loss_sum_b*2))*20)
   --print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
   -- output the sampled images
   local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
@@ -326,6 +327,10 @@ for i=1,N do
   print(i)
   local highres = data['highres'][i]:type('torch.FloatTensor'):div(255)
   local lowres = data['lowres'][i]:type('torch.FloatTensor')
+  local imgdiff = torch.add(highres[1], -1, lowres[1])
+  local diff = torch.mean(imgdiff:cmul(imgdiff))
+  print('bicubic loss: ', diff/2)
+  print('bicubic PSNR: ', math.log10(1 / math.sqrt(diff))*20)
   local lowres_rgb = utils.ycbcr2rgb(lowres)
   lowres_rgb = lowres_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')
   image.save(string.format('SR/%d_lowres.png', i), lowres_rgb)

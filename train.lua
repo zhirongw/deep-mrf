@@ -50,7 +50,7 @@ cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 1000, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-learning_rate_decay_every', 2000, 'every how many iterations thereafter to drop LR by half?')
 cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
@@ -229,6 +229,10 @@ local function lossFun()
   local dpixels = protos.pm:backward(data.pixels, dpred)
   --print('Backward time: ' .. timer:time().real .. ' seconds')
 
+  -- normalize the gradients for different directions
+  if opt.grad_norm then
+    protos.pm:norm_grad(grad_params)
+  end
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
   grad_params:clamp(-opt.grad_clip, opt.grad_clip)
@@ -291,28 +295,6 @@ while true do
     -- print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
   end
 
-  --local xxx = grad_params[{{6001, 726000}}]
-  --xxx = xxx:view(6*200,3*200)
-  --print(torch.mean(torch.abs(xxx[{{},{1,200}}])))
-  --print(torch.mean(torch.abs(xxx[{{},{201,400}}])))
-  --print(torch.mean(torch.abs(xxx[{{},{401,600}}])))
-  --local yyy = params[{{6001, 726000}}]
-  --yyy = yyy:view(6*200,3*200)
-  --print(torch.mean(torch.abs(yyy[{{},{1,200}}])))
-  --print(torch.mean(torch.abs(yyy[{{},{201,400}}])))
-  --print(torch.mean(torch.abs(yyy[{{},{401,600}}])))
-  --local xxx = grad_params[{{8401, 1128400}}]
-  --xxx = xxx:view(7*200,4*200)
-  --print(torch.mean(torch.abs(xxx[{{},{1,200}}])))
-  --print(torch.mean(torch.abs(xxx[{{},{201,400}}])))
-  --print(torch.mean(torch.abs(xxx[{{},{401,600}}])))
-  --print(torch.mean(torch.abs(xxx[{{},{601,800}}])))
-  --local yyy = params[{{8401, 1128400}}]
-  --yyy = yyy:view(7*200,4*200)
-  --print(torch.mean(torch.abs(yyy[{{},{1,200}}])))
-  --print(torch.mean(torch.abs(yyy[{{},{201,400}}])))
-  --print(torch.mean(torch.abs(yyy[{{},{401,600}}])))
-  --print(torch.mean(torch.abs(yyy[{{},{601,800}}])))
   -- perform a parameter update
   if opt.optim == 'rmsprop' then
     rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
