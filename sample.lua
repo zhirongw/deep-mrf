@@ -153,22 +153,12 @@ local function sample2n()
     collectgarbage()
   end
 
-  -- output the sampled images
-  images = images:add(-shift)
-  local images_cpu = images:float()
-  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
-  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
-  for i=1,batch_size do
-    local filename = path.join('samples', i .. '.png')
-    image.save(filename, images_cpu[{i,{},{},{}}])
-  end
-
-  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
-  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
   loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
   train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
   print('testing loss: ', loss_sum)
   print('training loss: ', train_loss_sum)
+
+  return images
 end
 
 local function sample3n()
@@ -232,23 +222,12 @@ local function sample3n()
     end
     collectgarbage()
   end
-
-  -- output the sampled images
-  images = images:add(-shift)
-  local images_cpu = images:float()
-  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
-  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
-  for i=1,batch_size do
-    local filename = path.join('samples', i .. '.png')
-    image.save(filename, images_cpu[{i,{},{},{}}])
-  end
-
-  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
-  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
   loss_sum = loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
   train_loss_sum = train_loss_sum / (pm.recurrent_stride * pm.recurrent_stride)
   print('testing loss: ', loss_sum)
   print('training loss: ', train_loss_sum)
+
+  return images
 end
 
 -- we need to cache the states of all the pixels, and go though the image twice.
@@ -296,7 +275,8 @@ local function sample4n()
     end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
     -- Need to fix this for the new model
-    local input_pixel = torch.cat(torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), pixel_down, 2)
+    -- local input_pixel = torch.cat(torch.cat(torch.cat(pixel_left, pixel_up, 2), pixel_right, 2), pixel_down, 2)
+    local input_pixel = torch.Tensor(batch_size, pm.pixel_size * 4):fill(border):cuda()
     local inputs = {input_pixel, unpack(states[pl])}
     for i,v in ipairs(states[pu]) do table.insert(inputs, v) end
     for i,v in ipairs(states[pr]) do table.insert(inputs, v) end
@@ -318,19 +298,6 @@ local function sample4n()
     train_loss_sum_f = train_loss_sum_f + train_loss
   end
   collectgarbage()
-
-  -- output the sampled images
-  images = images:add(-shift)
-  local images_cpu = images:narrow(3, 1, pm.seq_length)
-  images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
-  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
-  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
-  for i=1,batch_size do
-    local filename = path.join('samples', i .. '_f.png')
-    image.save(filename, images_cpu[{i,{},{},{}}])
-  end
-  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
-  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
   loss_sum_f = loss_sum_f / (pm.recurrent_stride * pm.recurrent_stride)
   train_loss_sum_f = train_loss_sum_f / (pm.recurrent_stride * pm.recurrent_stride)
   print('forward testing loss: ', loss_sum_f)
@@ -353,27 +320,47 @@ local function sample4n()
     pi = pm._Bindex[{t, 5}]
     if pl == 0 then
       pixel_left = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pl > pm.seq_length then
+      pixel_left = images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
     else
-      if pl > pm.seq_length then pixel_left = images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
-      else pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}] end
+      if pm.output_back then
+        pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}]
+      else
+        pixel_left = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     if pu == 0 then
       pixel_up = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pu > pm.seq_length then
+      pixel_up = images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
     else
-      if pu > pm.seq_length then pixel_up = images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
-      else pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}] end
+      if pm.output_back then
+        pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}]
+      else
+        pixel_up = torch.zeros(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     if pr == 0 then
       pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pr > pm.seq_length then
+      pixel_right = images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
     else
-      if pr > pm.seq_length then pixel_right = images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
-      else pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}] end
+      if pm.output_back then
+        pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}]
+      else
+        pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     if pd == 0 then
       pixel_down = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+    elseif pd > pm.seq_length then
+      pixel_down = images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
     else
-      if pd > pm.seq_length then pixel_down = images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
-      else pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}] end
+      if pm.output_back then
+        pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}]
+      else
+        pixel_down = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
+      end
     end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1] }
     -- Need to fix this for the new model
@@ -401,18 +388,6 @@ local function sample4n()
   end
   collectgarbage()
 
-  -- output the sampled images
-  images = images:add(-shift)
-  local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
-  images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
-  images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
-  images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
-  for i=1,batch_size do
-    local filename = path.join('samples', i .. '_b.png')
-    image.save(filename, images_cpu[{i,{},{},{}}])
-  end
-  --loss_sum = loss_sum / (opt.img_size * opt.img_size)
-  --train_loss_sum = train_loss_sum / (opt.img_size * opt.img_size)
   loss_sum_b = loss_sum_b / (pm.recurrent_stride * pm.recurrent_stride)
   train_loss_sum_b = train_loss_sum_b / (pm.recurrent_stride * pm.recurrent_stride)
   print('backward testing loss: ', loss_sum_b)
@@ -421,12 +396,24 @@ local function sample4n()
   print('training loss: ', (train_loss_sum_f + train_loss_sum_b) / 2)
 end
 
+local images
 if pm.num_neighbors == 2 then
-  sample2n()
+  images = sample2n()
 elseif pm.num_neighbors == 3 then
-  sample3n()
+  images = sample3n()
 elseif pm.num_neighbors == 4 then
-  sample4n()
+  images = sample4n()
 else
   print('not implemented')
+end
+
+-- output the sampled images
+images = images:add(-shift)
+local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
+images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
+images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
+images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
+for i=1,batch_size do
+  local filename = path.join('samples', i .. '_b.png')
+  image.save(filename, images_cpu[{i,{},{},{}}])
 end

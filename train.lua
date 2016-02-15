@@ -41,16 +41,18 @@ cmd:option('-batch_size',32,'what is the batch size in number of images per batc
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
+cmd:option('-output_back', true, 'For 4D model, feed the output of the first sweep to the next sweep')
+cmd:option('-grad_norm', true, 'whether to normalize the gradients for each direction')
 cmd:option('-loss_policy', 'exp', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 cmd:option('-noise', 0, 'input perturbation by adding noise')
 
 -- Optimization: for the Pixel Model
 cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',1e-4,'learning rate')
+cmd:option('-learning_rate',2e-3,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 5000, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.90,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-learning_rate_decay_every', 2000, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
@@ -100,10 +102,8 @@ if string.len(opt.start_from) > 0 then
   protos = loaded_checkpoint.protos
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
-  local runs = 1
-  if protos.pm.num_neighbors == 4 then runs = 2 end
   protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures,
-                  {policy=loaded_checkpoint.opt.loss_policy, val=loaded_checkpoint.opt.loss_decay, runs=runs}) -- not in checkpoints, create manually
+                  {policy=loaded_checkpoint.opt.loss_policy, val=loaded_checkpoint.opt.loss_decay}) -- not in checkpoints, create manually
   iter = loaded_checkpoint.iter
 else
   -- create protos from scratch
@@ -120,20 +120,19 @@ else
   pmOpt.mult_in = opt.mult_in
   pmOpt.num_neighbors = opt.num_neighbors
   pmOpt.border_init = opt.border_init
-  local runs = 1
+  pmOpt.output_back = opt.output_back
   if opt.num_neighbors == 2 then
     protos.pm = nn.PixelModel(pmOpt)
   elseif opt.num_neighbors == 3 then
     protos.pm = nn.PixelModel3N(pmOpt)
   elseif opt.num_neighbors == 4 then
     protos.pm = nn.PixelModel4N(pmOpt)
-    runs = 2
   else
     print('the number of neighbors should be between 2 - 4')
   end
   -- criterion for the pixel model
   protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures,
-                  {policy=opt.loss_policy, val=opt.loss_decay, runs=runs })
+                  {policy=opt.loss_policy, val=opt.loss_decay})
 end
 
 -- ship everything to GPU, maybe
@@ -230,6 +229,10 @@ local function lossFun()
   local dpixels = protos.pm:backward(data.pixels, dgmms)
   --print('Backward time: ' .. timer:time().real .. ' seconds')
 
+  -- normalize the gradients for different directions
+  if opt.grad_norm then
+    protos.pm:norm_grad(grad_params)
+  end
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
   grad_params:clamp(-opt.grad_clip, opt.grad_clip)

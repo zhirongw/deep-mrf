@@ -218,6 +218,7 @@ function layer:__init(opt)
   self.mult_in = utils.getopt(opt, 'mult_in')
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
+  self.input_size = self.pixel_size*self.num_neighbors
   if self.pixel_size == 3 then
     self.output_size = self.num_mixtures * (3+3+3+1)
   else
@@ -225,7 +226,7 @@ function layer:__init(opt)
   end
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
-  self.core = LSTM.lstm3d(self.pixel_size*self.num_neighbors, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
+  self.core = LSTM.lstm3d(self.input_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
   self:_createInitState(1) -- will be lazily resized later during forward passes
 end
 
@@ -410,6 +411,46 @@ function layer:updateGradInput(input, gradOutput)
   return self.gradInput
 end
 
+-- normalize the gradients for left, right against up.
+-- need to parse the flattened gradients
+function layer:norm_grad(flatGrad)
+  -- for the first layer
+  local start = 0
+  local i2h = flatGrad[{{start+1, start+self.input_size*6*self.rnn_size}}]
+  i2h = i2h:view(6*self.rnn_size, self.input_size)
+  i2h[{{},{1*self.pixel_size+1,2*self.pixel_size}}]:div(2)
+  start = start + self.input_size * 6 * self.rnn_size + 6 * self.rnn_size
+  local h2h = flatGrad[{{start+1, start+3*6*self.rnn_size*self.rnn_size}}]
+  h2h = h2h:view(6*self.rnn_size, 3*self.rnn_size)
+  h2h[{{},{self.rnn_size+1, 2*self.rnn_size}}]:div(2)
+  start = start + 3*6*self.rnn_size*self.rnn_size + 6 * self.rnn_size
+  -- for the rest layers
+  for i=2,self.num_layers do
+    if self.mult_in then
+      i2h = flatGrad[{{start+1, start+(self.input_size+self.rnn_size)*6*self.rnn_size}}]
+      i2h = i2h:view(6*self.rnn_size, self.input_size + self.rnn_size)
+      i2h[{{},{1*self.pixel_size+1,2*self.pixel_size}}]:div(2)
+      start = start + (self.input_size + self.rnn_size) * 6 * self.rnn_size + 6 * self.rnn_size
+    else
+      i2h = flatGrad[{{start+1, start+self.input_size*6*self.rnn_size}}]
+      i2h = i2h:view(6*self.rnn_size, self.input_size)
+      i2h[{{},{1*self.pixel_size+1,2*self.pixel_size}}]:div(2)
+      start = start + self.input_size * 6 * self.rnn_size + 6 * self.rnn_size
+    end
+    h2h = flatGrad[{{start+1, start+3*6*self.rnn_size*self.rnn_size}}]
+    h2h = h2h:view(6*self.rnn_size, 3*self.rnn_size)
+    h2h[{{},{self.rnn_size+1, 2*self.rnn_size}}]:div(2)
+    start = start + 3*6*self.rnn_size*self.rnn_size + 6 * self.rnn_size
+  end
+  -- make sure we parse it right
+  if self.mult_in then
+    start = start + self.num_layers * self.rnn_size * self.output_size + self.output_size
+  else
+    start = start + self.rnn_size * self.output_size + self.output_size
+  end
+  assert(start == flatGrad:size(1), 'error when parsing the flattened gradients')
+end
+
 -------------------------------------------------------------------------------
 -- PIXEL Model core for 4 Neighbor Case
 -- The sequence genrates each pixel twice, forward and backward. Each sequence
@@ -433,6 +474,8 @@ function layer:__init(opt)
   self.mult_in = utils.getopt(opt, 'mult_in')
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
+  self.output_back = utils.getopt(opt, 'output_back')
+  self.input_size = self.pixel_size*self.num_neighbors
   if self.pixel_size == 3 then
     self.output_size = self.num_mixtures * (3+3+3+1)
   else
@@ -440,7 +483,7 @@ function layer:__init(opt)
   end
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
-  self.core = LSTM.lstm4d(self.pixel_size*self.num_neighbors, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
+  self.core = LSTM.lstm4d(self.input_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
   self:_createInitState(1) -- will be lazily resized later during forward passes
   self:_buildIndex()
 end
@@ -564,32 +607,24 @@ function layer:updateOutput(input)
   assert(input:size(1) == sl)
   local batch_size = input:size(2)
   -- output is a table, indexed by the seq index.
+  self.output = torch.Tensor(sl, batch_size, self.output_size):type(input:type())
   input = torch.repeatTensor(input, 2, 1, 1)
-  self.output = torch.Tensor(2*sl, batch_size, self.output_size):type(input:type())
 
   self:_createInitState(batch_size)
 
   self._states = {[0] = self.init_state}
+  self._inter = torch.zeros(self.output:size()):type(self.output:type())
   self._inputs = {}
   -- forward loop through the image pixels
+  -- the seq info will never be available for the first sweep.
+ input[{{1,sl}, {}, {1, 4*self.pixel_size}}] = self.border_init
   for t=1,sl do
     local pl = self._Findex[{t, 1}]
     local pu = self._Findex[{t, 2}]
     local pr = self._Findex[{t, 3}]
     local pd = self._Findex[{t, 4}]
     local pi = self._Findex[{t, 5}]
-    -- prepare the input border
-    if self.border_init == 0 then
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
-    else
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-    end
+    -- prepare the input border. First round will never be available.
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
     self._inputs[t] = {input[pi],unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t], v) end
@@ -600,7 +635,7 @@ function layer:updateOutput(input)
     -- save the state
     self._states[t] = {}
     for i=1,self.num_state do table.insert(self._states[t], lsts[i]) end
-    self.output[pi] = lsts[#lsts]
+    self._inter[pi] = lsts[#lsts]
   end
   -- backward loop through the image pixels
   -- states in all four directions will be available
@@ -610,17 +645,22 @@ function layer:updateOutput(input)
     local pr = self._Bindex[{t, 3}]
     local pd = self._Bindex[{t, 4}]
     local pi = self._Bindex[{t, 5}]
-    -- prepare the input border
-    if self.border_init == 0 then
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = 0 end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = 0 end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = 0 end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = 0 end
+    if not self.output_back then
+      -- pixel no connected from the first sweep.
+      if pl <= sl then input[{pi, {}, {1, self.pixel_size}}] = self.border_init end
+      if pu <= sl then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = self.border_init end
+      if pr <= sl then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.border_init end
+      if pd <= sl then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self.border_init end
     else
-      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
-      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = torch.rand(batch_size, self.pixel_size) end
+      -- pixel connected from the the first sweep.
+      if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = self.border_init end
+      if pu == 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = self.border_init end
+      if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.border_init end
+      if pd == 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self.border_init end
+      if pl <= sl and pl > 0 then input[{pi, {}, {1, self.pixel_size}}] = self._inter[self._Findex[{pl,5}]] end
+      if pu <= sl and pu > 0 then input[{pi, {}, {1*self.pixel_size+1, 2*self.pixel_size}}] = self._inter[self._Findex[{pu,5}]] end
+      if pr <= sl and pr > 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self._inter[self._Findex[{pr,5}]] end
+      if pd <= sl and pd > 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self._inter[self._Findex[{pd,5}]] end
     end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
     self._inputs[t+sl] = {input[pi],unpack(self._states[pl])}
@@ -657,6 +697,7 @@ function layer:updateGradInput(input, gradOutput)
   -- initialize the gradient of states all to zeros.
   -- this works when init_state is all zeros
   local _dstates = {}
+  self._dinter = torch.zeros(self._inter:size()):type(self._inter:type())
   -- the backward table
   for t=1,sl do
     local pl = self._Bindex[{t, 1}]
@@ -668,10 +709,20 @@ function layer:updateGradInput(input, gradOutput)
     if _dstates[t+sl] == nil then _dstates[t+sl] = self.init_state end
     local douts = {}
     for k=1,#_dstates[t+sl] do table.insert(douts, _dstates[t+sl][k]) end
-    table.insert(douts, gradOutput[pi])
+    table.insert(douts, gradOutput[pi-sl])
     -- backward LSTMs
     local dinputs = self.clones[t+sl]:backward(self._inputs[t+sl], douts)
-
+    if self.output_back then
+    -- also needs to backpropagate to the output of the forward pass
+      if pl <= sl and pl > 0 then self._dinter[self._Findex[{pl,5}]]:add(dgradInput[{pi, {}, {1, self.pixel_size}}])
+        dgradInput[{pi, {}, {1, self.pixel_size}}]:fill(0) end
+      if pu <= sl and pu > 0 then self._dinter[self._Findex[{pu,5}]]:add(dgradInput[{pi, {}, {self.pixel_size+1, 2*self.pixel_size}}])
+        dgradInput[{pi, {}, {self.pixel_size+1, 2*self.pixel_size}}]:fill(0) end
+      if pr <= sl and pr > 0 then self._dinter[self._Findex[{pr,5}]]:add(dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}])
+        dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}]:fill(0) end
+      if pd <= sl and pd > 0 then self._dinter[self._Findex[{pd,5}]]:add(dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}])
+        dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}]:fill(0) end
+    end
     -- split the gradient to pixel and to state
     dgradInput[pi] = dinputs[1] -- first element is the input pixel vector
     -- copy to _dstates[t,t-1]
@@ -723,7 +774,7 @@ function layer:updateGradInput(input, gradOutput)
     if _dstates[t] == nil then _dstates[t] = self.init_state end
     local douts = {}
     for k=1,#_dstates[t] do table.insert(douts, _dstates[t][k]) end
-    table.insert(douts, gradOutput[pi])
+    table.insert(douts, self._dinter[pi])
     -- backward LSTMs
     local dinputs = self.clones[t]:backward(self._inputs[t], douts)
 
@@ -762,4 +813,55 @@ function layer:updateGradInput(input, gradOutput)
   end
   self.gradInput = torch.add(dgradInput:narrow(1,1,sl), dgradInput:narrow(1,sl+1,sl))
   return self.gradInput
+end
+
+-- normalize the gradients for 4 directions in 2 sweeps.
+-- need to parse the flattened gradients
+function layer:norm_grad(flatGrad)
+  -- for the first layer
+  local start = 0
+  local i2h
+  if not self.output_back then
+    i2h = flatGrad[{{start+1, start+self.input_size*7*self.rnn_size}}]
+    i2h = i2h:view(7*self.rnn_size, self.input_size)
+    i2h[{{},{3*self.pixel_size+1,4*self.pixel_size}}]:div(2)
+  end
+  start = start + self.input_size * 7 * self.rnn_size + 7 * self.rnn_size
+  local h2h = flatGrad[{{start+1, start+4*7*self.rnn_size*self.rnn_size}}]
+  h2h = h2h:view(7*self.rnn_size, 4*self.rnn_size)
+  h2h[{{},{1, 1*self.rnn_size}}]:div(1.5)
+  h2h[{{},{self.rnn_size+1, 2*self.rnn_size}}]:div(2)
+  h2h[{{},{2*self.rnn_size+1, 3*self.rnn_size}}]:div(1.5)
+  start = start + 4*7*self.rnn_size*self.rnn_size + 7 * self.rnn_size
+  -- for the rest layers
+  for i=2,self.num_layers do
+    if self.mult_in then
+      if not self.output_back then
+        i2h = flatGrad[{{start+1, start+(self.input_size+self.rnn_size)*7*self.rnn_size}}]
+        i2h = i2h:view(7*self.rnn_size, self.input_size + self.rnn_size)
+        i2h[{{},{3*self.pixel_size+1,4*self.pixel_size}}]:div(2)
+      end
+      start = start + (self.input_size + self.rnn_size) * 7 * self.rnn_size + 7 * self.rnn_size
+    else
+      if not self.output_back then
+        i2h = flatGrad[{{start+1, start+self.input_size*7*self.rnn_size}}]
+        i2h = i2h:view(7*self.rnn_size, self.input_size)
+        i2h[{{},{3*self.pixel_size+1,4*self.pixel_size}}]:div(2)
+      end
+      start = start + self.input_size * 7 * self.rnn_size + 7 * self.rnn_size
+    end
+    h2h = flatGrad[{{start+1, start+4*7*self.rnn_size*self.rnn_size}}]
+    h2h = h2h:view(7*self.rnn_size, 4*self.rnn_size)
+    h2h[{{},{1, 1*self.rnn_size}}]:div(1.5)
+    h2h[{{},{self.rnn_size+1, 2*self.rnn_size}}]:div(2)
+    h2h[{{},{2*self.rnn_size+1, 3*self.rnn_size}}]:div(1.5)
+    start = start + 4*7*self.rnn_size*self.rnn_size + 7 * self.rnn_size
+  end
+  -- make sure we parse it right
+  if self.mult_in then
+    start = start + self.num_layers * self.rnn_size * self.output_size + self.output_size
+  else
+    start = start + self.rnn_size * self.output_size + self.output_size
+  end
+  assert(start == flatGrad:size(1), 'error when parsing the flattened gradients')
 end
