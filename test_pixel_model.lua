@@ -7,8 +7,11 @@ and that everything gradient checks.
 
 require 'torch'
 require 'pm'
+require 'kld'
+require 'cudnn'
 
 local gradcheck = require 'misc.gradcheck'
+local VAE = require 'vae'
 
 local tests = {}
 local tester = torch.Tester()
@@ -131,6 +134,90 @@ local function gradCheckPM()
 
   -- print(gradInput)
   -- print(gradInput_num)
+  -- local g = gradInput:view(-1)
+  -- local gn = gradInput_num:view(-1)
+  -- for i=1,g:nElement() do
+  --   local r = gradcheck.relative_error(g[i],gn[i])
+  --   print(i, g[i], gn[i], r)
+  -- end
+
+  tester:assertTensorEq(gradInput, gradInput_num, 1e-4)
+  tester:assertlt(gradcheck.relative_error(gradInput, gradInput_num, 1e-8), 1e-4)
+end
+
+local function gradCheckIMPM()
+
+  local dtype = 'torch.DoubleTensor'
+  local imOpt = {}
+  imOpt.latent_variable_size = 3
+  imOpt.feature_size = 2
+  local im_model = VAE.ImageModel(imOpt)
+  local im = im_model[1]
+  local im_sampler  = im_model[2]
+  im:type(dtype)
+  im_sampler:type(dtype)
+  local opt = {}
+  opt.pixel_size = 3
+  opt.num_mixtures = 2
+  opt.recurrent_stride = 3
+  opt.rnn_size = 8
+  opt.num_layers = 2
+  opt.dropout = 0
+  opt.seq_length = 9
+  opt.batch_size = 2
+  opt.mult_in = false
+  opt.output_back = true
+  opt.feature_dim = imOpt.feature_size
+  opt.num_neighbors = 4
+  opt.border_init = 0
+  local pm = nn.PixelModel4N(opt)
+  pm:type(dtype)
+  local psOpt = {}
+  psOpt.patch_size = opt.recurrent_stride
+  psOpt.feature_dim = imOpt.feature_size
+  psOpt.im_batch_size = 1
+  psOpt.pm_batch_size = opt.batch_size
+  psOpt.num_neighbors = 4
+  psOpt.border_size = 0
+  psOpt.border = opt.border_init
+  psOpt.noise = 0
+  local patch_extractor = nn.PatchExtractor(psOpt)
+  patch_extractor:type(dtype)
+  local imcrit = nn.KLDCriterion()
+
+  local images = torch.rand(psOpt.im_batch_size, opt.pixel_size, 16, 16)
+  local dummy = torch.rand(psOpt.im_batch_size, opt.pixel_size, 16, 16)
+
+  -- evaluate the analytic gradient
+  local features, mean, log_var = unpack(im:forward(images))
+  local loss1 = imcrit:forward(mean, log_var)
+  local targets, patches = unpack(patch_extractor:forward({dummy, features}))
+  local pred = pm:forward(patches)
+
+  local w_pred = torch.randn(pred:size())
+  local ww = w_pred:clone()
+  -- generate random weighted sum criterion
+  local loss = torch.sum(torch.cmul(pred, w_pred))
+  local gradOutput = w_pred
+  local dpatches = pm:backward(patches, w_pred)
+  local x, dfeatures = unpack(patch_extractor:backward({dummy, features},{x, dpatches}))
+  local dmean, dlog_var = unpack(imcrit:backward(mean, log_var))
+  local gradInput = im:backward(images, {dfeatures, dmean, dlog_var})
+
+  -- create a loss function wrapper
+  local function f(x)
+    local features, mean, log_var = unpack(im:forward(x))
+    local targets, patches = unpack(patch_extractor:forward({dummy, features}))
+    local pred = pm:forward(patches)
+    local loss1 = imcrit:forward(mean, log_var)
+    local loss = torch.sum(torch.cmul(pred, ww))
+    return loss + loss1
+  end
+
+  local gradInput_num = gradcheck.numeric_gradient(f, images, 1, 1e-6)
+
+  print(gradInput)
+  print(gradInput_num)
   -- local g = gradInput:view(-1)
   -- local gn = gradInput_num:view(-1)
   -- for i=1,g:nElement() do
@@ -345,8 +432,9 @@ end
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 --tests.gradCheckPM = gradCheckPM
+tests.gradCheckIMPM = gradCheckIMPM
 -- tests.gradCheckCrit = gradCheckCrit
-tests.gradCheck = gradCheck
+--tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam

@@ -3,6 +3,8 @@ require 'nn'
 require 'nngraph'
 -- local imports
 require 'pm'
+require 'kld'
+local VAE = require 'vae'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
@@ -19,17 +21,24 @@ cmd:text()
 cmd:text('Options')
 
 -- Data input settings
-cmd:option('-train_path','../../pixel/SR/train_ycb.mat','path to the training data')
-cmd:option('-val_path','../../pixel/SR/val_ycb.mat','path to the val data')
+cmd:option('-train_path','G/images/2','path to the training data')
+cmd:option('-val_path','G/images/2','path to the val data')
 cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
 --cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 
--- Model settings
+-- Image Model settings
+cmd:option('-image_size',72,'resize the image to')
+cmd:option('-crop_size',64,'the actually size feeds into the network')
+cmd:option('-latent_size',10,'size of top latent representations of VAE')
+cmd:option('-feature_size',30,'size of pixel features from VAE')
+
+-- Pixel Model settings
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
-cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-patch_size',16,'size of the neighbor patch that a pixel is conditioned on')
+cmd:option('-num_mixtures',20,'number of mixtures used for encoding pixel output')
 cmd:option('-border_size',0,'size of the border to ignore, i.e. only the center label will be supervised')
 cmd:option('-border_init', 0, 'value to init pixels on the border.')
 cmd:option('-input_shift', -0.5, 'shift the input by a constant, should get better performance.')
@@ -38,26 +47,36 @@ cmd:option('-noise', 0, 'Input perturbation noise.')
 
 -- Optimization: General
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
-cmd:option('-batch_size',32,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
+cmd:option('-im_batch_size',1,'number of images per batch')
+cmd:option('-pm_batch_size',32,'number of patches per image per batch')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 cmd:option('-output_back', true, 'For 4D model, feed the output of the first sweep to the next sweep')
-cmd:option('-grad_norm', true, 'whether to normalize the gradients for each direction')
+cmd:option('-grad_norm', false, 'whether to normalize the gradients for each direction')
 cmd:option('-loss_policy', 'const', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
+
 -- Optimization: for the Pixel Model
-cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',1e-4,'learning rate')
+cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-learning_rate',1e-3,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 2000, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-optim_alpha',0.8,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
+-- Optimization: for the VAE
+cmd:option('-vae_optim','adam','optimization to use for VAE')
+cmd:option('-vae_optim_alpha',0.8,'alpha for momentum of VAE')
+cmd:option('-vae_optim_beta',0.999,'beta for momentum of VAE')
+cmd:option('-vae_learning_rate',1e-3,'learning rate for the VAE')
+cmd:option('-vae_weight_decay', 0, 'L2 weight decay just for the VAE')
+cmd:option('-finetune_vae_after', 0, 'After what iteration do we start finetuning the CNN? (-1 = disable; never finetune, 0 = finetune from start)')
+
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
-cmd:option('-checkpoint_path', '~/pixel/SR/models', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-save_checkpoint_every', 1000, 'how often to save a model checkpoint?')
+cmd:option('-checkpoint_path', '/home/zhirongw/pixel/VAE/models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc
@@ -86,8 +105,8 @@ end
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
 -------------------------------------------------------------------------------
-local loader = DataLoaderRaw{folder_path = opt.train_path, shift = opt.input_shift}
-local val_loader = DataLoaderRaw{folder_path = opt.val_path, shift = opt.input_shift}
+local loader = DataLoaderRaw{folder_path = opt.train_path, img_size = opt.image_size, shift = opt.input_shift, color = opt.color}
+local val_loader = DataLoaderRaw{folder_path = opt.val_path, img_size = opt.image_size, shift = opt.input_shift, color = opt.color}
 
 -------------------------------------------------------------------------------
 -- Initialize the networks
@@ -99,13 +118,25 @@ if string.len(opt.start_from) > 0 then
   print('initializing weights from ' .. opt.start_from)
   local loaded_checkpoint = torch.load(opt.start_from)
   protos = loaded_checkpoint.protos
+  local im_modules = protos.im:getModulesList()
+  for k,v in pairs(im_modules) do net_utils.unsanitize_gradients(v) end
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
-  protos.crit = nn.MSECriterion()
+  protos.imcrit = nn.KLDCriterion()
+  protos.pmcrit = nn.MSECriterion()
+  --protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
+  --              {policy=opt.loss_policy, val=opt.loss_decay})
   iter = loaded_checkpoint.iter
 else
   -- create protos from scratch
-  -- intialize pixel model
+  -- initialize image VAE
+  local imOpt = {}
+  imOpt.latent_variable_size = opt.latent_size
+  imOpt.feature_size = opt.feature_size
+  local im_model = VAE.ImageModel(imOpt)
+  protos.im = im_model[1]
+  protos.im_sampler  = im_model[2]
+  -- initialize pixel model
   local pmOpt = {}
   pmOpt.pixel_size = loader:getChannelSize()
   pmOpt.rnn_size = opt.rnn_size
@@ -118,6 +149,7 @@ else
   pmOpt.num_neighbors = opt.num_neighbors
   pmOpt.border_init = opt.border_init
   pmOpt.output_back = opt.output_back
+  pmOpt.feature_dim = opt.feature_size
   if pmOpt.num_neighbors == 3 then
     protos.pm = nn.PixelModel3N(pmOpt)
   elseif pmOpt.num_neighbors == 4 then
@@ -125,8 +157,22 @@ else
   else
     print('undefined')
   end
+  -- initialize the patch extractor
+  local psOpt = {}
+  psOpt.patch_size = opt.patch_size
+  psOpt.feature_dim = opt.feature_size
+  psOpt.im_batch_size = opt.im_batch_size
+  psOpt.pm_batch_size = opt.pm_batch_size
+  psOpt.num_neighbors = opt.num_neighbors
+  psOpt.border_size = opt.border_size
+  psOpt.border = opt.border_init
+  psOpt.noise = opt.noise
+  protos.patch_extractor = nn.PatchExtractor(psOpt)
   -- criterion for the pixel model
-  protos.crit = nn.MSECriterion()
+  protos.imcrit = nn.KLDCriterion()
+  protos.pmcrit = nn.MSECriterion()
+  --protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
+  --              {policy=opt.loss_policy, val=opt.loss_decay})
 end
 
 -- ship everything to GPU, maybe
@@ -141,62 +187,90 @@ print('Ignoring the border of size: ', opt.border_size)
 print('Input channel dimension: ', loader:getChannelSize())
 print('Input pixel shift: ', opt.input_shift)
 print('Input border init: ', opt.border_init)
-print('Training batch size: ', opt.batch_size)
+print('Training im batch size: ', opt.im_batch_size)
+print('Training pm batch size: ', opt.pm_batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
+local vae_params, vae_grad_params = protos.im:getParameters()
+local vae_sample_params, vae_sample_grad_params = protos.im_sampler:parameters()
 print('total number of parameters in PM: ', params:nElement())
+print('total number of parameters in VAE: ', vae_params:nElement())
 assert(params:nElement() == grad_params:nElement())
+assert(vae_params:nElement() == vae_grad_params:nElement())
 
 -- construct thin module clones that share parameters with the actual
 -- modules. These thin module will have no intermediates and will be used
 -- for checkpointing to write significantly smaller checkpoint files
 local thin_pm = protos.pm:clone()
 thin_pm.core:share(protos.pm.core, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
+local thin_im = protos.im:clone()
+thin_im:share(protos.im, 'weight', 'bias') -- TODO: we are assuming that IM has specific members! figure out clean way to get rid of, not modular.
+local thin_im_sampler = protos.im_sampler:clone()
+thin_im_sampler:share(protos.im_sampler, 'weights', 'bias')
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
+--local im_modules = net_utils.listModules(thin_im)
+local im_modules = net_utils.list_nngraph_modules(thin_im)
+for k,v in pairs(im_modules) do net_utils.sanitize_gradients(v) end
+local im_sampler_modules = net_utils.list_nngraph_modules(thin_im_sampler)
+for k,v in pairs(im_sampler_modules) do net_utils.sanitize_gradients(v) end
 local pm_modules = thin_pm:getModulesList()
 for k,v in pairs(pm_modules) do net_utils.sanitize_gradients(v) end
-
+--print(net_utils.list_nngraph_modules(thin_im))
+--print(thin_im_sampler:listModules())
+local thin_p1, thin_p2 = thin_im_sampler:parameters()
 -- create clones and ensure parameter sharing. we have to do this
 -- all the way here at the end because calls such as :cuda() and
 -- :getParameters() reshuffle memory around.
 protos.pm:createClones()
 
 collectgarbage() -- "yeah, sure why not"
+
+batch_size = opt.im_batch_size * opt.pm_batch_size
 -------------------------------------------------------------------------------
 -- Validation evaluation
 -------------------------------------------------------------------------------
 local function eval_split(n)
+  protos.im:evaluate()
   protos.pm:evaluate()
   --loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
-  local loss_sum = 0
+  local loss1_sum = 0
+  local loss2_sum = 0
   local i = 0
   while i < n do
 
     -- fetch a batch of data
-    local data = val_loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
-                                patch_size = opt.patch_size, border_size = opt.border_size, gpu = opt.gpuid,
-                                border = opt.border_init, noise = opt.noise}
+    local data = val_loader:getBatch{batch_size = opt.im_batch_size,
+                                crop_size = opt.crop_size, gpu = opt.gpuid}
 
-    -- forward the model to get loss
-    local pred = protos.pm:forward(data.pixels)
+    -- 1. forward the image model
+    local features, mean, log_var = unpack(protos.im:forward(images))
+    -- 2. extract patches
+    local targets, patches = unpack(protos.patch_extractor:forward({images, features}))
+    -- 3. forward the pixel model
+    local pred = protos.pm:forward(patches)
     --print(gmms)
-    pred = pred:view(opt.patch_size, opt.patch_size, opt.batch_size, -1)
+    pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
     local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
-    local loss = protos.crit:forward(lpred, data.targets)
-    loss_sum = loss_sum + loss
+
+    local loss1 = protos.imcrit:forward(mean, log_var)
+    local loss2 = protos.pmcrit:forward(lpred, targets)
+    loss1_sum = loss1_sum + loss1
+    loss2_sum = loss2_sum + loss2
 
     i = i + 1
     if i % 10 == 0 then collectgarbage() end
   end
 
-  return loss_sum/n
+  return {kld_loss = loss1_sum/n, pixel_loss = loss2_sum/n}
 end
 
 -------------------------------------------------------------------------------
 -- Loss function
 -------------------------------------------------------------------------------
 local function lossFun()
+  protos.im:training()
   protos.pm:training()
+  vae_grad_params:zero()
   grad_params:zero()
 
   -----------------------------------------------------------------------------
@@ -204,31 +278,46 @@ local function lossFun()
   -----------------------------------------------------------------------------
   -- get batch of data
   --local timer = torch.Timer()
-  local data = loader:getBatch{batch_size = opt.batch_size, num_neighbors = opt.num_neighbors,
-                              patch_size = opt.patch_size, border_size = opt.border_size, gpu = opt.gpuid,
-                              border = opt.border_init, noise = opt.noise}
-
-  -- forward the pixel model
-  local pred = protos.pm:forward(data.pixels)
+  local images = loader:getBatch{batch_size = opt.im_batch_size,
+                              crop_size = opt.crop_size, gpu = opt.gpuid}
+  -- 1. forward the image model
+  local features, mean, log_var = unpack(protos.im:forward(images))
+  print(vae_params[-1])
+  print(vae_sample_params[16][-1])
+  --print(thin_p1[16][-1])
+  --print(thin_p2)
+  -- 2. extract patches
+  local targets, patches = unpack(protos.patch_extractor:forward({images, features}))
+  -- 3. forward the pixel model
+  local pred = protos.pm:forward(patches)
   --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
-  pred = pred:view(opt.patch_size, opt.patch_size, opt.batch_size, -1)
+  pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
   local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
-  local loss = protos.crit:forward(lpred, data.targets)
+
+  -----------------------------------------------------------------------------
+  -- Loss
+  -----------------------------------------------------------------------------
+  local loss1 = protos.imcrit:forward(mean, log_var)
+  local loss2 = protos.pmcrit:forward(lpred, targets)
+  local dmean, dlog_var = unpack(protos.imcrit:backward(mean, log_var))
+  local dlpred = protos.pmcrit:backward(lpred, targets)
+  --print('Criterion time: ' .. timer:time().real .. ' seconds')
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
   -- backprop criterion
-  local dlpred = protos.crit:backward(lpred, data.targets)
   local dpred = torch.Tensor(pred:size()):type(pred:type()):fill(0)
   dpred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}] = dlpred
-  dpred = dpred:view(-1, opt.batch_size, protos.pm.pixel_size)
-  --print('Criterion time: ' .. timer:time().real .. ' seconds')
-  -- backprop pixel model
-  local dpixels = protos.pm:backward(data.pixels, dpred)
+  dpred = dpred:view(-1, batch_size, protos.pm.pixel_size)
+  -- 3. backprop pixel model
+  local dpatches = protos.pm:backward(patches, dpred)
+  -- 2. backprop patch extractor
+  local x, dfeatures = unpack(protos.patch_extractor:backward({images, features},{x, dpatches}))
+  -- 1. backprop image model
+  local dimages = protos.im:backward(images, {dfeatures, dmean, dlog_var})
   --print('Backward time: ' .. timer:time().real .. ' seconds')
-
   -- normalize the gradients for different directions
   if opt.grad_norm then
     protos.pm:norm_grad(grad_params)
@@ -236,10 +325,15 @@ local function lossFun()
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
   grad_params:clamp(-opt.grad_clip, opt.grad_clip)
+  -- apply L2 regularization
+  if opt.vae_weight_decay > 0 then
+    vae_grad_params:add(opt.vae_weight_decay, vae_params)
+  end
+  vae_grad_params:clamp(-opt.grad_clip, opt.grad_clip)
 
   -----------------------------------------------------------------------------
   -- and lets get out!
-  local losses = { total_loss = loss }
+  local losses = { kld_loss = loss1, pixel_loss = loss2 }
   return losses
 end
 
@@ -248,6 +342,7 @@ end
 -------------------------------------------------------------------------------
 local loss0
 local optim_state = {}
+local vae_optim_state = {}
 local loss_history = {}
 local val_loss_history = {}
 local best_score
@@ -256,23 +351,25 @@ while true do
 
   -- decay the learning rate
   local learning_rate = opt.learning_rate
+  local vae_learning_rate = opt.vae_learning_rate
   if iter > opt.learning_rate_decay_start and opt.learning_rate_decay_start >= 0 then
     local frac = (iter - opt.learning_rate_decay_start) / opt.learning_rate_decay_every
     local decay_factor = math.pow(0.5, frac)
     learning_rate = learning_rate * decay_factor -- set the decayed rate
+    vae_learning_rate = vae_learning_rate * decay_factor
   end
 
   -- eval loss/gradient
   local losses = lossFun()
-  if iter % opt.losses_log_every == 0 then loss_history[iter] = losses.total_loss end
-  print(string.format('iter %d: %f. LR: %f', iter, losses.total_loss, learning_rate))
+  if iter % opt.losses_log_every == 0 then loss_history[iter] = losses end
+  print(string.format('iter %d: %f = %f + %f. LR: %f', iter, losses.kld_loss+losses.pixel_loss, losses.pixel_loss, losses.kld_loss, learning_rate))
 
   -- save checkpoint once in a while (or on final iteration)
   if ((opt.save_checkpoint_every > 0 and iter % opt.save_checkpoint_every == 0) or iter == opt.max_iters) then
 
     -- evaluate the validation performance
-    local val_loss = eval_split(14)
-    print('validation loss: ', val_loss)
+    --local val_loss = eval_split(14)
+    --print('validation loss: ', val_loss)
     -- val_loss_history[iter] = val_loss
 
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id .. iter)
@@ -287,9 +384,18 @@ while true do
     -- include the protos (which have weights) and save to file
     local save_protos = {}
     save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
+    save_protos.im = thin_im_sampler -- these are shared clones, and point to correct param storage
     checkpoint.protos = save_protos
-    torch.save(checkpoint_path .. '.t7', checkpoint)
-    print('wrote checkpoint to ' .. checkpoint_path .. '.t7')
+    torch.save(checkpoint_path .. 'sample' .. '.t7', checkpoint)
+    print('wrote sampling checkpoint to ' .. checkpoint_path .. 'sample' .. '.t7')
+
+    local save_protos = {}
+    save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
+    save_protos.im = thin_im -- these are shared clones, and point to correct param storage
+    checkpoint.protos = save_protos
+    torch.save(checkpoint_path .. 'train' .. '.t7', checkpoint)
+    print('wrote training checkpoint to ' .. checkpoint_path .. 'train' .. '.t7')
+
 
     -- utils.write_json(checkpoint_path .. '.json', checkpoint)
     -- print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
@@ -312,10 +418,23 @@ while true do
     error('bad option opt.optim')
   end
 
+  -- do a cnn update (if finetuning, and if rnn above us is not warming up right now)
+  if opt.finetune_vae_after >= 0 and iter >= opt.finetune_vae_after then
+    if opt.vae_optim == 'sgd' then
+      sgd(vae_params, vae_grad_params, vae_learning_rate)
+    elseif opt.vae_optim == 'sgdm' then
+      sgdm(vae_params, vae_grad_params, vae_learning_rate, opt.vae_optim_alpha, vae_optim_state)
+    elseif opt.vae_optim == 'adam' then
+      adam(vae_params, vae_grad_params, vae_learning_rate, opt.vae_optim_alpha, opt.vae_optim_beta, opt.optim_epsilon, vae_optim_state)
+    else
+      error('bad option for opt.vae_optim')
+    end
+  end
+
   -- stopping criterions
   if iter % 10 == 0 then collectgarbage() end -- good idea to do this once in a while, i think
-  if loss0 == nil then loss0 = losses.total_loss end
-  if losses.total_loss > loss0 * 2000 then
+  if loss0 == nil then loss0 = losses.kld_loss + losses.pixel_loss end
+  if losses.kld_loss+losses.pixel_loss > loss0 * 2000 then
     print('loss seems to be exploding, quitting.')
     break
   end

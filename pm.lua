@@ -217,8 +217,9 @@ function layer:__init(opt)
   self.mult_in = utils.getopt(opt, 'mult_in')
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
+  self.feature_dim = utils.getopt(opt, 'feature_dim')
   self.output_size = self.pixel_size
-  self.input_size = self.pixel_size*(self.num_neighbors+1)
+  self.input_size = self.pixel_size*self.num_neighbors+self.feature_dim
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
   self.core = LSTM.lstm3d(self.input_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
@@ -468,8 +469,14 @@ function layer:__init(opt)
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
   self.output_back = utils.getopt(opt, 'output_back')
+  self.feature_dim = utils.getopt(opt, 'feature_dim')
   self.output_size = self.pixel_size -- for euclidean loss
-  self.input_size = self.pixel_size*(4+1)
+  --if self.pixel_size == 3 then
+  --  self.output_size = self.num_mixtures * (3+3+3+1)
+  --else
+  --  self.output_size = self.num_mixtures * (1+1+0+1)
+  --end
+  self.input_size = self.pixel_size*4+self.feature_dim
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
   self.core = LSTM.lstm4d(self.input_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
