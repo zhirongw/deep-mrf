@@ -37,7 +37,7 @@ function DataLoaderRaw:__init(opt)
     diff = diff:cmul(diff)
     bicubic_loss = bicubic_loss + torch.mean(diff)
   end
-  bicubic_loss = bicubic_loss / 2 / self.N
+  bicubic_loss = bicubic_loss / self.N
   print('bicubic baseline is : ', bicubic_loss)
   data = nil -- free it
   self.iterator = 1
@@ -63,6 +63,7 @@ function DataLoaderRaw:getBatch(opt)
   local border_size = utils.getopt(opt, 'border_size', 5)
   local seq_length = patch_size * patch_size - 1
   local batch_size = utils.getopt(opt, 'batch_size', 5)
+
   -- load an image
   local highres = self.highres[self.iterator]
   local lowres = self.lowres[self.iterator]
@@ -71,11 +72,11 @@ function DataLoaderRaw:getBatch(opt)
 
   -- two potential schemes, initialize with a border of one pixel in both directions.
   local low_patches = torch.zeros(batch_size, self.nChannels, patch_size, patch_size)
-  local high_patches
-  high_patches = torch.Tensor(batch_size, self.nChannels, patch_size+2, patch_size+2):fill(opt.border)
+  local high_patches = torch.Tensor(batch_size, self.nChannels, patch_size+2, patch_size+2):fill(opt.border)
 
   --local infos = {}
   for i=1,batch_size do
+
     local h = torch.random(1, highres:size(2)-patch_size+1)
     local w = torch.random(1, highres:size(3)-patch_size+1)
     -- put the patch in the center.

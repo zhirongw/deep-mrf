@@ -43,7 +43,7 @@ cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower 
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 cmd:option('-output_back', true, 'For 4D model, feed the output of the first sweep to the next sweep')
-cmd:option('-grad_norm', true, 'whether to normalize the gradients for each direction')
+cmd:option('-grad_norm', false, 'whether to normalize the gradients for each direction')
 cmd:option('-loss_policy', 'const', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 -- Optimization: for the Pixel Model
@@ -59,6 +59,7 @@ cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothi
 cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', '~/pixel/SR/models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
+cmd:option('-val_losses_every', 1000, 'How often do we evaluate validation losses')
 
 -- misc
 cmd:option('-backend', 'cudnn', 'nn|cudnn')
@@ -267,13 +268,15 @@ while true do
   if iter % opt.losses_log_every == 0 then loss_history[iter] = losses.total_loss end
   print(string.format('iter %d: %f. LR: %f', iter, losses.total_loss, learning_rate))
 
-  -- save checkpoint once in a while (or on final iteration)
-  if ((opt.save_checkpoint_every > 0 and iter % opt.save_checkpoint_every == 0) or iter == opt.max_iters) then
-
+  if (opt.val_losses_every > 0 and iter % opt.val_losses_every == 0) or iter == opt.max_iters then
     -- evaluate the validation performance
     local val_loss = eval_split(14)
     print('validation loss: ', val_loss)
     -- val_loss_history[iter] = val_loss
+  end
+
+  -- save checkpoint once in a while (or on final iteration)
+  if ((opt.save_checkpoint_every > 0 and iter % opt.save_checkpoint_every == 0) or iter == opt.max_iters) then
 
     local checkpoint_path = path.join(opt.checkpoint_path, 'model_id' .. opt.id .. iter)
 

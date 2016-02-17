@@ -68,6 +68,7 @@ if shift == nil then shift = 0 end
 crit = nn.MSECriterion()
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
+pm.output_back = true
 pm.core:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
 print('Number of neighbors used: ', pm.num_neighbors)
@@ -301,6 +302,7 @@ local function sample4n(lowres, gt)
     states[t+pm.seq_length] = {}
     for i=1,pm.num_state do table.insert(states[t+pm.seq_length], lsts[i]:clone()) end
     pixel = lsts[#lsts]
+    --pixel:clamp(16/255+shift,235/255+shift)
     --print(gmms)
 
     -- sampling
@@ -314,7 +316,7 @@ local function sample4n(lowres, gt)
 
   loss_sum_b = loss_sum_b / pm.seq_length
   print('backward loss: ', loss_sum_b)
-  print('Our PSNR: ', math.log10(1 / math.sqrt(loss_sum_b*2))*20)
+  print('Our PSNR: ', math.log10(1 / math.sqrt(loss_sum_b))*20)
   --print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
   -- output the sampled images
   local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
@@ -329,7 +331,7 @@ for i=1,N do
   local lowres = data['lowres'][i]:type('torch.FloatTensor')
   local imgdiff = torch.add(highres[1], -1, lowres[1])
   local diff = torch.mean(imgdiff:cmul(imgdiff))
-  print('bicubic loss: ', diff/2)
+  print('bicubic loss: ', diff)
   print('bicubic PSNR: ', math.log10(1 / math.sqrt(diff))*20)
   local lowres_rgb = utils.ycbcr2rgb(lowres)
   lowres_rgb = lowres_rgb:clamp(0,1):mul(255):type('torch.ByteTensor')

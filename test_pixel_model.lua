@@ -106,6 +106,7 @@ local function gradCheckPM()
   opt.mult_in = false
   opt.num_neighbors = 4
   opt.border_init = 0
+  opt.output_back = true
   local pm = nn.PixelModel4N(opt)
   pm:type(dtype)
 
@@ -344,9 +345,9 @@ end
 --tests.doubleApiForwardTest = forwardApiTestFactory('torch.DoubleTensor')
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
---tests.gradCheckPM = gradCheckPM
+tests.gradCheckPM = gradCheckPM
 -- tests.gradCheckCrit = gradCheckCrit
-tests.gradCheck = gradCheck
+--tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam

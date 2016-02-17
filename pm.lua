@@ -628,6 +628,7 @@ function layer:updateOutput(input)
   end
   -- backward loop through the image pixels
   -- states in all four directions will be available
+  input[{{sl+1,2*sl}, {}, {1, 4*self.pixel_size}}] = self.border_init
   for t=sl,1,-1 do
     local pl = self._Bindex[{t, 1}]
     local pu = self._Bindex[{t, 2}]
@@ -651,6 +652,9 @@ function layer:updateOutput(input)
       if pr <= sl and pr > 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self._inter[self._Findex[{pr,5}]] end
       if pd <= sl and pd > 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self._inter[self._Findex[{pd,5}]] end
     end
+    if pl > sl then input[{pi, {}, {1, self.pixel_size}}] = self.output[self._Bindex[{pl-sl,5}]-sl] end
+    if pr > sl then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.output[self._Bindex[{pr-sl,5}]-sl] end
+    if pd > sl then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self.output[self._Bindex[{pd-sl,5}]-sl] end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
     self._inputs[t+sl] = {input[pi],unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t+sl], v) end
@@ -704,6 +708,13 @@ function layer:updateGradInput(input, gradOutput)
 
     -- split the gradient to pixel and to state
     dgradInput[pi] = dinputs[1] -- first element is the input pixel vector
+    -- backpropagate to previous predictions
+    if pl > sl then gradOutput[self._Bindex[{pl-sl,5}]-sl]:add(dgradInput[{pi, {}, {1, self.pixel_size}}])
+        dgradInput[{pi, {}, {1, self.pixel_size}}]:fill(0)end
+    if pr > sl then gradOutput[self._Bindex[{pr-sl,5}]-sl]:add(dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}])
+        dgradInput[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}]:fill(0)end
+    if pd > sl then gradOutput[self._Bindex[{pd-sl,5}]-sl]:add(dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}])
+        dgradInput[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}]:fill(0)end
     if self.output_back then
     -- also needs to backpropagate to the output of the forward pass
       if pl <= sl and pl > 0 then self._dinter[self._Findex[{pl,5}]]:add(dgradInput[{pi, {}, {1, self.pixel_size}}])
