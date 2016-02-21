@@ -19,7 +19,7 @@ cmd:text()
 cmd:text('Options')
 
 -- Data input settings
-cmd:option('-folder_path','','path to the preprocessed textures')
+cmd:option('-folder_path','imgs/','path to the preprocessed textures')
 cmd:option('-image_size',256,'resize the input image to')
 cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
@@ -42,7 +42,7 @@ cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower 
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 cmd:option('-output_back', true, 'For 4D model, feed the output of the first sweep to the next sweep')
-cmd:option('-grad_norm', true, 'whether to normalize the gradients for each direction')
+cmd:option('-grad_norm', false, 'whether to normalize the gradients for each direction')
 cmd:option('-loss_policy', 'exp', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 cmd:option('-noise', 0, 'input perturbation by adding noise')
@@ -57,8 +57,8 @@ cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
-cmd:option('-checkpoint_path', '~/pixel/models', 'folder to save checkpoints into (empty = this folder)')
+cmd:option('-save_checkpoint_every', 1000, 'how often to save a model checkpoint?')
+cmd:option('-checkpoint_path', 'models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
 -- misc

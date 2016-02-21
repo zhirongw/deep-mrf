@@ -409,7 +409,8 @@ end
 
 -- output the sampled images
 images = images:add(-shift)
-local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
+--local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
+local images_cpu = images
 images_cpu = images_cpu:float():view(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride)
 images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size+1, pm.recurrent_stride}}]
 images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
