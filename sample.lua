@@ -4,7 +4,10 @@ require 'nngraph'
 require 'image'
 -- local imports
 require 'pm'
+require 'im'
+require 'kld'
 require 'gmms'
+require 'misc.DataLoaderRaw'
 local matio = require 'matio'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
@@ -65,14 +68,13 @@ local patch_size = checkpoint.opt['patch_size']
 local border = checkpoint.opt['border_init']
 local shift = checkpoint.opt['input_shift']
 if shift == nil then shift = 0 end
-local crit = nn.MSECriterion()
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
-local im = protos.im -- this one is actually im_sampler.
+local im = protos.im
+local imcrit = nn.KLDCriterion()
+local pmcrit = nn.MSECriterion()
 pm.core:evaluate()
 im:evaluate()
-local thin_im, thin_im2 = im:parameters()
-print(thin_im[16][-1])
 print('The loaded model is trained on patch size with: ', patch_size)
 print('Number of neighbors used: ', pm.num_neighbors)
 
@@ -165,7 +167,7 @@ end
 -- we need to cache the states of all the pixels, and go though the image twice.
 local function sample4n(features, gt)
   local states = {[0]=init_state}
-
+  local batch_size = features:size(1)
   local h = features:size(3)
   local w = features:size(4)
   pm.recurrent_stride = w
@@ -178,9 +180,9 @@ local function sample4n(features, gt)
 
   images = torch.Tensor(batch_size, pm.pixel_size, h*w):cuda()
   images = torch.repeatTensor(images, 1, 1, 2)
-  --gt = gt:view(batch_size, pm.pixel_size, h*w)
-  --gt = torch.repeatTensor(gt, 1, 1, 2)
-  --gt = gt:cuda()
+  gt = gt:view(batch_size, pm.pixel_size, h*w)
+  gt = torch.repeatTensor(gt, 1, 1, 2)
+  gt = gt:cuda()
 
   -------------------------------The Forward Pass -----------------------------
   local loss_sum_f = 0
@@ -295,42 +297,50 @@ local function sample4n(features, gt)
     --print(gmms)
 
     -- sampling
-    --local train_pixel = gt[{{}, {}, pi}]:clone()
-    --loss = crit:forward(pixel, train_pixel)
+    local train_pixel = gt[{{}, {}, pi}]:clone()
+    --loss = pmcrit:forward(pixel, train_pixel)
     --pixel = train_pixel
     images[{{},{},pi}] = pixel
     --loss_sum_b = loss_sum_b + loss
   end
   collectgarbage()
 
-  --loss_sum_b = loss_sum_b / pm.seq_length
-  --print('backward loss: ', loss_sum_b)
+  loss_sum_b = loss_sum_b / pm.seq_length
+  print('backward loss: ', loss_sum_b)
   --print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
   -- output the sampled images
-  local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
-  return images_cpu
+  --local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
+  local images = images:view(batch_size, pm.pixel_size, 2, h, w)
+  return images
 end
 
+--
+local loader = DataLoaderRaw{folder_path = opt.test_path, img_size = checkpoint.opt.image_size, shift = checkpoint.opt.input_shift, color = checkpoint.opt.color}
+local images = loader:getBatch{batch_size = batch_size, crop_size = checkpoint.opt.crop_size, gpu = opt.gpuid}
 
-local noise = torch.randn(batch_size, checkpoint.opt.latent_size):cuda()
-local features = im:forward(noise)
-if pm.num_neighbors == 3 then
-  local out = sample3n(features)
-  out:add(-shift)
-  for i = 1,batch_size do
-    local im = out[i]:clamp(0,1):mul(255):type('torch.ByteTensor')
-    image.save("G/"..i.."_gen.png", im)
-  end
+local features, mean, var_log = unpack(im:forward(images))
+local loss_im = imcrit:forward(mean, var_log)
+--]]
+-------------------------------------------------------------------------------
+--
+--local noise = torch.randn(batch_size, checkpoint.opt.latent_size):cuda()
+--local features = im.decoder:forward(noise)
 
-elseif pm.num_neighbors == 4 then
-  local out = sample4n(features)
-  out:add(-shift)
-  for i = 1,batch_size do
-    local im = out[{i,{},1,{},{}}]
-    im = im:clamp(0,1):mul(255):type('torch.ByteTensor')
-    image.save("G/"..i.."_f.png", im)
-    im = out[{i,{},2,{},{}}]
-    im = im:clamp(0,1):mul(255):type('torch.ByteTensor')
-    image.save("G/"..i.."_b.png", im)
-  end
+local out = sample4n(features, images)
+local out_images = out[{{}, {}, 2, {},{}}]
+
+local loss_pm = pmcrit:forward(out_images, images)
+print(loss_pm, loss_im)
+
+out:add(-shift)
+images:add(-shift)
+for i = 1,batch_size do
+  --local pic = out[{i,{},1,{},{}}]
+  --pic = pic:clamp(0,1):mul(255):type('torch.ByteTensor')
+  --image.save("G/"..i.."_f.png", pic)
+  local pic = out_images[{i,{},{},{}}]
+  pic = pic:clamp(0,1):mul(255):type('torch.ByteTensor')
+  image.save("G/"..i.."_out.png", pic)
+  local pic = images[i]:clamp(0,1):mul(255):type('torch.ByteTensor')
+  image.save("G/"..i.."_in.png", pic)
 end

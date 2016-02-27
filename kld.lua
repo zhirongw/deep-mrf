@@ -11,7 +11,7 @@ function KLDCriterion:updateOutput(mean, log_var)
     KLDelements:add(1)
     KLDelements:add(log_var)
 
-    self.output = -(0.5/mean:size(1)/mean:size(2)) * torch.sum(KLDelements)
+    self.output = -0.5 * torch.sum(KLDelements)
 
     return self.output
 end
@@ -19,10 +19,10 @@ end
 function KLDCriterion:updateGradInput(mean, log_var)
 	self.gradInput = {}
 
-    self.gradInput[1] = mean:clone():div(mean:size(1)*mean:size(2))
+    self.gradInput[1] = mean:clone():mul(0.000001)
 
     -- Fix this to be nicer
-    self.gradInput[2] = torch.exp(log_var):mul(-1):add(1):mul(-0.5):mul(1/mean:size(1)/mean:size(2))
+    self.gradInput[2] = torch.exp(log_var):mul(-1):add(1):mul(-0.5*0.000001)
 
     return self.gradInput
 end

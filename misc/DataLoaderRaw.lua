@@ -40,7 +40,6 @@ function DataLoaderRaw:__init(opt)
   self.N = #self.files
   print('DataLoaderRaw found ' .. self.N .. ' images')
 
-  self.iterator = 1
   self.images = {}
   if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end
 
@@ -53,7 +52,7 @@ function DataLoaderRaw:__init(opt)
     end
     self.images[i] = img:add(opt.shift)
   end
-  self.iterator = 1
+  self.iterator = 10
 end
 
 function DataLoaderRaw:resetIterator()

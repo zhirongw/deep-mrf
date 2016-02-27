@@ -3,6 +3,7 @@ require 'nn'
 require 'nngraph'
 -- local imports
 require 'pm'
+require 'im'
 require 'kld'
 local VAE = require 'vae'
 local utils = require 'misc.utils'
@@ -31,7 +32,7 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 -- Image Model settings
 cmd:option('-image_size',72,'resize the image to')
 cmd:option('-crop_size',64,'the actually size feeds into the network')
-cmd:option('-latent_size',10,'size of top latent representations of VAE')
+cmd:option('-latent_size',500,'size of top latent representations of VAE')
 cmd:option('-feature_size',30,'size of pixel features from VAE')
 
 -- Pixel Model settings
@@ -58,19 +59,19 @@ cmd:option('-loss_policy', 'const', 'loss decay policy for spatial patch') -- ex
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 
 -- Optimization: for the Pixel Model
-cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',1e-3,'learning rate')
+cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-learning_rate',1e-4,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 2000, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.8,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Optimization: for the VAE
-cmd:option('-vae_optim','adam','optimization to use for VAE')
-cmd:option('-vae_optim_alpha',0.8,'alpha for momentum of VAE')
+cmd:option('-vae_optim','rmsprop','optimization to use for VAE')
+cmd:option('-vae_optim_alpha',0.95,'alpha for momentum of VAE')
 cmd:option('-vae_optim_beta',0.999,'beta for momentum of VAE')
-cmd:option('-vae_learning_rate',1e-3,'learning rate for the VAE')
+cmd:option('-vae_learning_rate',1e-4,'learning rate for the VAE')
 cmd:option('-vae_weight_decay', 0, 'L2 weight decay just for the VAE')
 cmd:option('-finetune_vae_after', 0, 'After what iteration do we start finetuning the CNN? (-1 = disable; never finetune, 0 = finetune from start)')
 
@@ -133,9 +134,7 @@ else
   local imOpt = {}
   imOpt.latent_variable_size = opt.latent_size
   imOpt.feature_size = opt.feature_size
-  local im_model = VAE.ImageModel(imOpt)
-  protos.im = im_model[1]
-  protos.im_sampler  = im_model[2]
+  protos.im = nn.VAEModel(imOpt)
   -- initialize pixel model
   local pmOpt = {}
   pmOpt.pixel_size = loader:getChannelSize()
@@ -192,7 +191,6 @@ print('Training pm batch size: ', opt.pm_batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
 local vae_params, vae_grad_params = protos.im:getParameters()
-local vae_sample_params, vae_sample_grad_params = protos.im_sampler:parameters()
 print('total number of parameters in PM: ', params:nElement())
 print('total number of parameters in VAE: ', vae_params:nElement())
 assert(params:nElement() == grad_params:nElement())
@@ -204,20 +202,14 @@ assert(vae_params:nElement() == vae_grad_params:nElement())
 local thin_pm = protos.pm:clone()
 thin_pm.core:share(protos.pm.core, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
 local thin_im = protos.im:clone()
-thin_im:share(protos.im, 'weight', 'bias') -- TODO: we are assuming that IM has specific members! figure out clean way to get rid of, not modular.
-local thin_im_sampler = protos.im_sampler:clone()
-thin_im_sampler:share(protos.im_sampler, 'weights', 'bias')
+thin_im.encoder:share(protos.im.encoder, 'weight', 'bias', 'running_mean', 'running_var') -- TODO: we are assuming that IM has specific members! figure out clean way to get rid of, not modular.
+thin_im.decoder:share(protos.im.decoder, 'weight', 'bias', 'running_mean', 'running_var') -- TODO: we are assuming that IM has specific members! figure out clean way to get rid of, not modular.
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
---local im_modules = net_utils.listModules(thin_im)
-local im_modules = net_utils.list_nngraph_modules(thin_im)
-for k,v in pairs(im_modules) do net_utils.sanitize_gradients(v) end
-local im_sampler_modules = net_utils.list_nngraph_modules(thin_im_sampler)
-for k,v in pairs(im_sampler_modules) do net_utils.sanitize_gradients(v) end
 local pm_modules = thin_pm:getModulesList()
 for k,v in pairs(pm_modules) do net_utils.sanitize_gradients(v) end
---print(net_utils.list_nngraph_modules(thin_im))
---print(thin_im_sampler:listModules())
-local thin_p1, thin_p2 = thin_im_sampler:parameters()
+local im_modules = thin_im:getModulesList()
+for k,v in pairs(im_modules) do net_utils.sanitize_gradients(v) end
+
 -- create clones and ensure parameter sharing. we have to do this
 -- all the way here at the end because calls such as :cuda() and
 -- :getParameters() reshuffle memory around.
@@ -239,7 +231,7 @@ local function eval_split(n)
   while i < n do
 
     -- fetch a batch of data
-    local data = val_loader:getBatch{batch_size = opt.im_batch_size,
+    local images = val_loader:getBatch{batch_size = opt.im_batch_size,
                                 crop_size = opt.crop_size, gpu = opt.gpuid}
 
     -- 1. forward the image model
@@ -272,7 +264,8 @@ local function lossFun()
   protos.pm:training()
   vae_grad_params:zero()
   grad_params:zero()
-
+  print(params[-1])
+  print(vae_params[-1])
   -----------------------------------------------------------------------------
   -- Forward pass
   -----------------------------------------------------------------------------
@@ -282,10 +275,6 @@ local function lossFun()
                               crop_size = opt.crop_size, gpu = opt.gpuid}
   -- 1. forward the image model
   local features, mean, log_var = unpack(protos.im:forward(images))
-  print(vae_params[-1])
-  print(vae_sample_params[16][-1])
-  --print(thin_p1[16][-1])
-  --print(thin_p2)
   -- 2. extract patches
   local targets, patches = unpack(protos.patch_extractor:forward({images, features}))
   -- 3. forward the pixel model
@@ -384,18 +373,10 @@ while true do
     -- include the protos (which have weights) and save to file
     local save_protos = {}
     save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
-    save_protos.im = thin_im_sampler -- these are shared clones, and point to correct param storage
-    checkpoint.protos = save_protos
-    torch.save(checkpoint_path .. 'sample' .. '.t7', checkpoint)
-    print('wrote sampling checkpoint to ' .. checkpoint_path .. 'sample' .. '.t7')
-
-    local save_protos = {}
-    save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
     save_protos.im = thin_im -- these are shared clones, and point to correct param storage
     checkpoint.protos = save_protos
-    torch.save(checkpoint_path .. 'train' .. '.t7', checkpoint)
-    print('wrote training checkpoint to ' .. checkpoint_path .. 'train' .. '.t7')
-
+    torch.save(checkpoint_path .. '.t7', checkpoint)
+    print('wrote training checkpoint to ' .. checkpoint_path .. '.t7')
 
     -- utils.write_json(checkpoint_path .. '.json', checkpoint)
     -- print('wrote json checkpoint to ' .. checkpoint_path .. '.json')
@@ -420,7 +401,11 @@ while true do
 
   -- do a cnn update (if finetuning, and if rnn above us is not warming up right now)
   if opt.finetune_vae_after >= 0 and iter >= opt.finetune_vae_after then
-    if opt.vae_optim == 'sgd' then
+    if opt.vae_optim == 'rmsprop' then
+      rmsprop(vae_params, vae_grad_params, vae_learning_rate, opt.vae_optim_alpha,opt.optim_epsilon, vae_optim_state)
+    elseif opt.vae_optim == 'adagrad' then
+      adagrad(vae_params, vae_grad_params, vae_learning_rate, opt.optim_epsilon, vae_optim_state)
+    elseif opt.vae_optim == 'sgd' then
       sgd(vae_params, vae_grad_params, vae_learning_rate)
     elseif opt.vae_optim == 'sgdm' then
       sgdm(vae_params, vae_grad_params, vae_learning_rate, opt.vae_optim_alpha, vae_optim_state)
