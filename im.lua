@@ -195,20 +195,20 @@ function layer:updateOutput(input)
 
   self.z = self.sampler:forward({self.mean, self.var_log})
 
-  local features = self.decoder:forward(self.z)
+  local features, pred = unpack(self.decoder:forward(self.z))
 
-  self.output = {features, self.mean, self.var_log}
+  self.output = {features, pred, self.mean, self.var_log}
 
   return self.output
 end
 
 function layer:updateGradInput(input, gradOutput)
 
-  local dz = self.decoder:backward(self.z, gradOutput[1])
+  local dz = self.decoder:backward(self.z, {gradOutput[1], gradOutput[2]})
 
   local dmean, dvar_log = unpack(self.sampler:backward({self.mean, self.var_log}, dz))
-  dmean:add(gradOutput[2])
-  dvar_log:add(gradOutput[3])
+  dmean:add(gradOutput[3])
+  dvar_log:add(gradOutput[4])
 
   self.gradInput = self.encoder:backward(input, {dmean, dvar_log})
 

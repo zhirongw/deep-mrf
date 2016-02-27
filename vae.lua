@@ -49,11 +49,13 @@ function VAE.get_decoder(latent_variable_size, feature_size)
   decoder:add(nn.SpatialBatchNormalization(256))
   decoder:add(cudnn.ReLU(true))
   decoder:add(nn.SpatialUpSamplingNearest(2))
-  decoder:add(cudnn.SpatialConvolution(256, 128, 5, 5, 1, 1, 2, 2))
+  decoder:add(cudnn.SpatialConvolution(256, feature_size, 5, 5, 1, 1, 2, 2))
   decoder:add(nn.SpatialBatchNormalization(128))
   decoder:add(cudnn.ReLU(true))
-  decoder:add(cudnn.SpatialConvolution(128, feature_size, 3, 3, 1, 1, 1, 1))
-  decoder:add(cudnn.Sigmoid())
+  two_outs = nn.ConcatTable()
+  two_outs:add(nn.Identity())
+  two_outs:add(cudnn.SpatialConvolution(feature_size, 3, 3, 3, 1, 1, 1, 1))
+  decoder:add(two_outs)
 
   return decoder
 end
