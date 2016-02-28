@@ -49,7 +49,7 @@ cmd:option('-noise', 0, 'input perturbation by adding noise')
 
 -- Optimization: for the Pixel Model
 cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',2e-3,'learning rate')
+cmd:option('-learning_rate',1e-3,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 2000, 'every how many iterations thereafter to drop LR by half?')
 cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')

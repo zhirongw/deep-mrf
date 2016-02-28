@@ -124,7 +124,7 @@ function crit:updateOutput(input, target)
     g_rpb = mvn.b3normpdf(g_mean_diff, g_clk_inv):cmul(g_w)
   end
   g_rpb = g_rpb:view(D, N, nm)
-  local pdf = torch.sum(g_rpb, 3)
+  local pdf = torch.cmax(torch.sum(g_rpb, 3), 1e-40)
 
   -- do the loss the gradients
   local loss = - torch.sum(torch.cmul(torch.log(pdf), (self.LW[{{},{},1}]))) -- loss of pixels, Mixture of Gaussians
