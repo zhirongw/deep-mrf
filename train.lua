@@ -54,7 +54,7 @@ cmd:option('-pm_batch_size', 32,'number of patches per image per batch')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
-cmd:option('-output_back', true, 'For 4D model, feed the output of the first sweep to the next sweep')
+cmd:option('-output_back', false, 'For 4D model, feed the output of the first sweep to the next sweep')
 cmd:option('-grad_norm', false, 'whether to normalize the gradients for each direction')
 cmd:option('-loss_policy', 'const', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
@@ -77,7 +77,7 @@ cmd:option('-vae_weight_decay', 0, 'L2 weight decay just for the VAE')
 cmd:option('-finetune_vae_after', 0, 'After what iteration do we start finetuning the CNN? (-1 = disable; never finetune, 0 = finetune from start)')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 5000, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 1000, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', '/home/zhirongw/pixel/VAE/models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 
@@ -104,7 +104,7 @@ if opt.gpuid >= 0 then
   cutorch.setDevice(opt.gpuid + 1) -- note +1 because lua is 1-indexed
 end
 
-if opt.phase == 1 then opt.learning_rate = 0 else opt.vae_learning_rate = 0 end
+if opt.phase == 1 then opt.learning_rate = 0 end --else opt.vae_learning_rate = 0 end
 if opt.phase == 1 then opt.patch_size = 1 end
 -------------------------------------------------------------------------------
 -- Create the Data Loader instance
@@ -127,10 +127,28 @@ if string.len(opt.start_from) > 0 then
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
   -- initialize the pm
-  protos.pm.batch_size = opt.batch_size
-  protos.pm.recurrent_stride = opt.patch_size
-  protos.pm.seq_length = opt.patch_size * opt.patch_size
-  protos.pm:_buildIndex()
+  -- initialize pixel model
+  local pmOpt = {}
+  pmOpt.pixel_size = loader:getChannelSize()
+  pmOpt.rnn_size = opt.rnn_size
+  pmOpt.num_layers = opt.num_layers
+  pmOpt.dropout = opt.drop_prob_pm
+  pmOpt.batch_size = opt.batch_size
+  pmOpt.num_mixtures = opt.num_mixtures
+  pmOpt.recurrent_stride = opt.patch_size
+  pmOpt.seq_length = opt.patch_size * opt.patch_size
+  pmOpt.mult_in = opt.mult_in
+  pmOpt.num_neighbors = opt.num_neighbors
+  pmOpt.border_init = opt.border_init
+  pmOpt.output_back = opt.output_back
+  pmOpt.feature_dim = opt.feature_size
+  if pmOpt.num_neighbors == 3 then
+    protos.pm = nn.PixelModel3N(pmOpt)
+  elseif pmOpt.num_neighbors == 4 then
+    protos.pm = nn.PixelModel4N(pmOpt)
+  else
+    print('undefined')
+  end
   -- initialize the patch extractor
   local psOpt = {}
   psOpt.patch_size = opt.patch_size
@@ -147,9 +165,9 @@ if string.len(opt.start_from) > 0 then
   if opt.phase == 1 then
     protos.pmcrit = nn.MSECriterion()
   else
-    protos.pmcrit = nn.MSECriterion()
-  --protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
-  --              {policy=opt.loss_policy, val=opt.loss_decay})
+    --protos.pmcrit = nn.MSECriterion()
+    protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
+                {policy=opt.loss_policy, val=opt.loss_decay, runs=1})
   end
   iter = loaded_checkpoint.iter
 else
@@ -196,9 +214,9 @@ else
   if opt.phase == 1 then
     protos.pmcrit = nn.MSECriterion()
   else
-    protos.pmcrit = nn.MSECriterion()
-  --protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
-  --              {policy=opt.loss_policy, val=opt.loss_decay})
+    --protos.pmcrit = nn.MSECriterion()
+    protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
+                  {policy=opt.loss_policy, val=opt.loss_decay, runs=1})
   end
 end
 
@@ -269,11 +287,11 @@ local function eval_split(n)
     -- 3. forward the pixel model
     local pred = protos.pm:forward(patches)
     --print(gmms)
-    pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
-    local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
+    --pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
+    --local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
 
     local loss1 = protos.imcrit:forward(mean, log_var)
-    local loss2 = protos.pmcrit:forward(lpred, targets)
+    local loss2 = protos.pmcrit:forward(pred, targets)
     loss1_sum = loss1_sum + loss1
     loss2_sum = loss2_sum + loss2
 
@@ -349,25 +367,24 @@ local function lossFun()
   local pred = protos.pm:forward(patches)
   --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
-  pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
-  local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
-
+  --pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
+  --local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
   -----------------------------------------------------------------------------
   -- Loss
   -----------------------------------------------------------------------------
   local loss1 = protos.imcrit:forward(mean, log_var)
-  local loss2 = protos.pmcrit:forward(lpred, targets)
+  local loss2 = protos.pmcrit:forward(pred, targets)
   local dmean, dlog_var = unpack(protos.imcrit:backward(mean, log_var))
-  local dlpred = protos.pmcrit:backward(lpred, targets)
+  local dpred = protos.pmcrit:backward(pred, targets)
   --print('Criterion time: ' .. timer:time().real .. ' seconds')
 
   -----------------------------------------------------------------------------
   -- Backward pass
   -----------------------------------------------------------------------------
   -- backprop criterion
-  local dpred = torch.Tensor(pred:size()):type(pred:type()):fill(0)
-  dpred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}] = dlpred
-  dpred = dpred:view(-1, batch_size, protos.pm.pixel_size)
+  --local dpred = torch.Tensor(pred:size()):type(pred:type()):fill(0)
+  --dpred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}] = dlpred
+  --dpred = dpred:view(-1, batch_size, protos.pm.pixel_size)
   -- 3. backprop pixel model
   local dpatches = protos.pm:backward(patches, dpred)
   -- 2. backprop patch extractor

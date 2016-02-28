@@ -30,16 +30,16 @@ function crit:_createLossWeights(input)
     local N = input:size(2)
     local nm = self.num_mixtures
     -- here we assume that D is a square number
-    local L = math.sqrt(D/self.opt.runs)
+    local L = math.sqrt(D)
     if self.opt.policy == 'exp' then
       local w = torch.cpow(torch.Tensor(L):fill(self.opt.val), torch.range(L-1,0,-1))
       w = w:resize(L, 1, 1, 1)
-      w = torch.repeatTensor(w, self.opt.runs, L, N, nm)
+      w = torch.repeatTensor(w, 1, L, N, nm)
       self.LW = w:view(D, N, nm)
     elseif self.opt.policy == 'linear' then
       local w = torch.range(1, L):mul(1/L)
-      w = w:resize(L, 1, 1)
-      w = torch.repeatTensor(w, self.opt.runs, L, N, nm)
+      w = w:resize(L, 1, 1, 1)
+      w = torch.repeatTensor(w, 1, L, N, nm)
       self.LW = w:view(D, N, nm)
     else -- constant
       self.LW = torch.Tensor(D, N, nm):fill(1.0)
@@ -63,7 +63,6 @@ The criterion must be able to accomodate variably-sized sequences by making sure
 the gradients are properly set to zeros where appropriate.
 --]]
 function crit:updateOutput(input, target)
-  if self.opt.runs > 1 then target = torch.repeatTensor(target, self.opt.runs, 1, 1) end
   local D_ = input:size(1)
   local N_ = input:size(2)
   local D,N,Mp1= target:size(1), target:size(2), target:size(3)
@@ -125,7 +124,7 @@ function crit:updateOutput(input, target)
     g_rpb = mvn.b3normpdf(g_mean_diff, g_clk_inv):cmul(g_w)
   end
   g_rpb = g_rpb:view(D, N, nm)
-  local pdf = torch.sum(g_rpb, 3)
+  local pdf = torch.cmax(torch.sum(g_rpb, 3), 1e-40) -- for numerial stability
 
   -- do the loss the gradients
   local loss = - torch.sum(torch.cmul(torch.log(pdf), (self.LW[{{},{},1}]))) -- loss of pixels, Mixture of Gaussians

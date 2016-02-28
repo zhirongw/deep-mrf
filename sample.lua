@@ -27,6 +27,7 @@ cmd:option('-model','','path to model to evaluate')
 cmd:option('-batch_size', 1, 'if > 0 then overrule, otherwise load from checkpoint.')
 cmd:option('-sample_max', 1, '1 = sample argmax words. 0 = sample from distributions.')
 cmd:option('-beam_size', 2, 'used when sample_max = 1, indicates number of beams in beam search. Usually 2 or 3 works well. More is not better. Set this to 1 for faster runtime but a bit worse performance.')
+cmd:option('-temperature', 1.0, 'temperature when sampling from distributions (i.e. when sample_max = 0). Lower = "safer" predictions.')
 -- For evaluation on a folder of images:
 cmd:option('-test_path', 'G/images/2', 'predict on the images in this folder path, only used for inpainting')
 cmd:option('-image_root', '', 'In case the image paths have to be preprended with a root path to an image folder')
@@ -68,11 +69,13 @@ local patch_size = checkpoint.opt['patch_size']
 local border = checkpoint.opt['border_init']
 local shift = checkpoint.opt['input_shift']
 if shift == nil then shift = 0 end
+local temperature = opt.temperature
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
 local im = protos.im
 local imcrit = nn.KLDCriterion()
-local pmcrit = nn.MSECriterion()
+local pmcrit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures,
+            {policy=opt.loss_policy, val=opt.loss_decay, runs=1})
 pm.core:evaluate()
 im:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
@@ -210,13 +213,13 @@ local function sample4n(features, gt)
     -- save the state
     states[t] = {}
     for i=1,pm.num_state do table.insert(states[t], lsts[i]:clone()) end
-    pixel = lsts[#lsts]
+    gmms = lsts[#lsts]
     --print(gmms)
     -- sampling
     --local train_pixel = gt[{{}, {}, pi}]:clone()
     --loss = crit:forward(pixel, train_pixel)
     --pixel = train_pixel
-    images[{{},{},pi}] = pixel
+    --images[{{},{},pi}] = pixel
     --loss_sum_f = loss_sum_f + loss
   end
   collectgarbage()
@@ -226,6 +229,7 @@ local function sample4n(features, gt)
 
   -------------------------------The Backward Pass -----------------------------
   local loss_sum_b = 0
+  local loss_sum_b_train = 0
   local pixel
   -- loop through each timestep
   for t=pm.seq_length,1,-1 do
@@ -293,20 +297,23 @@ local function sample4n(features, gt)
     -- save the state
     states[t+pm.seq_length] = {}
     for i=1,pm.num_state do table.insert(states[t+pm.seq_length], lsts[i]:clone()) end
-    pixel = lsts[#lsts]
+    gmms = lsts[#lsts]
     --print(gmms)
 
     -- sampling
     local train_pixel = gt[{{}, {}, pi}]:clone()
-    --loss = pmcrit:forward(pixel, train_pixel)
+    pixel, loss, train_loss = pmcrit:sample(gmms, temperature, train_pixel)
     --pixel = train_pixel
     images[{{},{},pi}] = pixel
-    --loss_sum_b = loss_sum_b + loss
+    loss_sum_b = loss_sum_b + loss
+    loss_sum_b_train = loss_sum_b_train + train_loss
   end
   collectgarbage()
 
   loss_sum_b = loss_sum_b / pm.seq_length
+  loss_sum_b_train = loss_sum_b_train / pm.seq_length
   print('backward loss: ', loss_sum_b)
+  print('backward training data loss: ', loss_sum_b_train)
   --print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
   -- output the sampled images
   --local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
@@ -318,7 +325,7 @@ end
 local loader = DataLoaderRaw{folder_path = opt.test_path, img_size = checkpoint.opt.image_size, shift = checkpoint.opt.input_shift, color = checkpoint.opt.color}
 local images = loader:getBatch{batch_size = batch_size, crop_size = checkpoint.opt.crop_size, gpu = opt.gpuid}
 
-local features, mean, var_log = unpack(im:forward(images))
+local features, dummy, mean, var_log = unpack(im:forward(images))
 local loss_im = imcrit:forward(mean, var_log)
 --]]
 -------------------------------------------------------------------------------
@@ -326,11 +333,11 @@ local loss_im = imcrit:forward(mean, var_log)
 --local noise = torch.randn(batch_size, checkpoint.opt.latent_size):cuda()
 --local features = im.decoder:forward(noise)
 
-local out = sample4n(features, images)
+local out = sample4n(dummy, images)
 local out_images = out[{{}, {}, 2, {},{}}]
 
-local loss_pm = pmcrit:forward(out_images, images)
-print(loss_pm, loss_im)
+--local loss_pm = pmcrit:forward(out_images, images)
+--print(loss_pm, loss_im)
 
 out:add(-shift)
 images:add(-shift)

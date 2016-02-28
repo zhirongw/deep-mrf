@@ -218,7 +218,13 @@ function layer:__init(opt)
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
   self.feature_dim = utils.getopt(opt, 'feature_dim')
-  self.output_size = self.pixel_size
+  self.num_mixtures = utils.getopt(opt, 'num_mixtures')
+  --self.output_size = self.pixel_size
+  if self.pixel_size == 3 then
+    self.output_size = self.num_mixtures * (3+3+3+1)
+  else
+    self.output_size = self.num_mixtures * (1+1+0+1)
+  end
   self.input_size = self.pixel_size*self.num_neighbors+self.feature_dim
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
@@ -467,15 +473,16 @@ function layer:__init(opt)
   self.seq_length = utils.getopt(opt, 'seq_length')
   self.mult_in = utils.getopt(opt, 'mult_in')
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
+  self.num_mixtures = utils.getopt(opt, 'num_mixtures')
   self.border_init = utils.getopt(opt, 'border_init')
   self.output_back = utils.getopt(opt, 'output_back')
   self.feature_dim = utils.getopt(opt, 'feature_dim')
-  self.output_size = self.pixel_size -- for euclidean loss
-  --if self.pixel_size == 3 then
-  --  self.output_size = self.num_mixtures * (3+3+3+1)
-  --else
-  --  self.output_size = self.num_mixtures * (1+1+0+1)
-  --end
+  --self.output_size = self.pixel_size -- for euclidean loss
+  if self.pixel_size == 3 then
+    self.output_size = self.num_mixtures * (3+3+3+1)
+  else
+    self.output_size = self.num_mixtures * (1+1+0+1)
+  end
   self.input_size = self.pixel_size*4+self.feature_dim
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
