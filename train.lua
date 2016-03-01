@@ -29,30 +29,30 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 -- Model settings
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
-cmd:option('-num_mixtures',20,'number of gaussian mixtures to encode the output pixel')
+cmd:option('-num_mixtures',10,'number of gaussian mixtures to encode the output pixel')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
-cmd:option('-num_neighbors',2,'number of neighbors for each pixel')
+cmd:option('-num_neighbors',3,'number of neighbors for each pixel')
 cmd:option('-border_init', 0, 'value to init the pixel on the border.')
-cmd:option('-input_shift', 0, 'shift the input by a constant, should get better performance.')
+cmd:option('-input_shift', -0.5, 'shift the input by a constant, should get better performance.')
 
 -- Optimization: General
 cmd:option('-max_iters', 20000, 'max number of iterations to run for (-1 = run forever)')
-cmd:option('-batch_size',32,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
+cmd:option('-batch_size',16,'what is the batch size in number of images per batch? (there will be x seq_per_img sentences)')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
-cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
+cmd:option('-drop_prob_pm', 0, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 cmd:option('-output_back', true, 'For 4D model, feed the output of the first sweep to the next sweep')
 cmd:option('-grad_norm', false, 'whether to normalize the gradients for each direction')
-cmd:option('-loss_policy', 'exp', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
+cmd:option('-loss_policy', 'const', 'loss decay policy for spatial patch') -- exp for exponential decay, and linear for linear decay
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 cmd:option('-noise', 0, 'input perturbation by adding noise')
 
 -- Optimization: for the Pixel Model
-cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
 cmd:option('-learning_rate',1e-3,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
-cmd:option('-learning_rate_decay_every', 2000, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-learning_rate_decay_every', 5000, 'every how many iterations thereafter to drop LR by half?')
+cmd:option('-optim_alpha',0.9,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
@@ -271,7 +271,7 @@ while true do
   if (iter % opt.save_checkpoint_every == 0 or iter == opt.max_iters) then
 
     -- evaluate the validation performance
-    local val_loss = eval_split(1)
+    local val_loss = eval_split(10)
     print('validation loss: ', val_loss)
     -- val_loss_history[iter] = val_loss
 

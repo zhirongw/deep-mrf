@@ -35,7 +35,7 @@ cmd:option('-split', 'test', 'if running on MSCOCO images, which split to use: v
 -- misc
 cmd:option('-backend', 'cudnn', 'nn|cudnn')
 cmd:option('-id', 'evalscript', 'an id identifying this run/job. used only if language_eval = 1 for appending to intermediate files')
-cmd:option('-seed', 123, 'random number generator seed to use')
+cmd:option('-seed', 13, 'random number generator seed to use')
 cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
 cmd:text()
 
@@ -77,6 +77,8 @@ local crit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures)
 pm.core:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
 print('Number of neighbors used: ', pm.num_neighbors)
+print('Number of mixtures used: ', pm.num_mixtures)
+print('rnn size: ', pm.rnn_size)
 
 -- prepare the empty states
 local init_state = {}
@@ -92,8 +94,13 @@ local states = {[0] = init_state}
 local images = torch.Tensor(batch_size, pm.pixel_size, pm.recurrent_stride, pm.recurrent_stride):cuda()
 ------------------ debug ------------------------
 local img = image.load('imgs/D1.png', pm.pixel_size, 'float')
-img = image.scale(img, 256, 256):resize(1, pm.pixel_size, 256, 256)
-img = img[{{}, {}, {1, pm.recurrent_stride},{1, pm.recurrent_stride}}]
+if pm.pixel_size == 1 then
+  img = img:resize(1, pm.pixel_size, img:size(1), img:size(2))
+else
+  img = img:resize(1, pm.pixel_size, img:size(2), img:size(3))
+end
+--img = image.scale(img, 256, 256):resize(1, pm.pixel_size, 256, 256)
+img = img[{{}, {}, {1, pm.recurrent_stride},{1, pm.recurrent_stride}}]:contiguous()
 img = torch.repeatTensor(img, batch_size, 1, 1, 1)
 img = img:cuda()
 -------------------------------------------------
@@ -215,7 +222,7 @@ local function sample3n()
       -- sampling
       local train_pixel = img[{{}, {}, h, ww}]:clone():add(shift)
       pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
-      --pixel = train_pixel
+      --if h < patch_size then pixel = train_pixel end
       images[{{},{},h,ww}] = pixel
       loss_sum = loss_sum + loss
       train_loss_sum = train_loss_sum + train_loss

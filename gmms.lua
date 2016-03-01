@@ -251,6 +251,7 @@ function crit:sample(input, temperature, gt_pixels)
 
   -- sampling process
   local mix_idx = torch.multinomial(g_ws, 1)
+  --local ignore, mix_idx = torch.max(g_ws, 2)
 
   for b=1,N do
     local p = mvn.rnd(g_mean[{b, mix_idx[{b,1}], {}}], g_clk[{b, mix_idx[{b,1}], {},{}}])

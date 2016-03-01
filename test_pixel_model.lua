@@ -155,7 +155,7 @@ local function gradCheckCrit()
   opt.mult_in = true
   opt.num_neighbors = 4
   opt.border_init = 0
-  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures, {policy='linear', val=0.9})
+  local crit = nn.PixelModelCriterion(opt.pixel_size, opt.num_mixtures, {policy='const', val=0.9})
   crit:type(dtype)
 
   local gmms = torch.rand(opt.seq_length, opt.batch_size, crit.output_size)
@@ -344,8 +344,8 @@ end
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 --tests.gradCheckPM = gradCheckPM
--- tests.gradCheckCrit = gradCheckCrit
-tests.gradCheck = gradCheck
+tests.gradCheckCrit = gradCheckCrit
+--tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample
 --tests.sample_beam = sample_beam
