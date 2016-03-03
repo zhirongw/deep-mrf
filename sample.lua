@@ -35,7 +35,7 @@ cmd:option('-split', 'test', 'if running on MSCOCO images, which split to use: v
 -- misc
 cmd:option('-backend', 'cudnn', 'nn|cudnn')
 cmd:option('-id', 'evalscript', 'an id identifying this run/job. used only if language_eval = 1 for appending to intermediate files')
-cmd:option('-seed', 13, 'random number generator seed to use')
+cmd:option('-seed', 123, 'random number generator seed to use')
 cmd:option('-gpuid', 0, 'which gpu to use. -1 = use CPU')
 cmd:text()
 

@@ -93,6 +93,7 @@ function crit:updateOutput(input, target)
   if ps == 3 then
     g_cov_input = input:narrow(3, p*nm*ps+1, nm*ps):clone()
     g_cov_input = g_cov_input:view(-1, 3)
+    g_cov_input = g_cov_input:mul(0.000)
     p = p + 1
     g_clk = torch.Tensor(D*N*nm, 3, 3):fill(0):type(g_var_input:type())
     g_clk[{{}, 1, 1}] = g_var[{{}, 1}]
@@ -125,6 +126,7 @@ function crit:updateOutput(input, target)
   end
   g_rpb = g_rpb:view(D, N, nm)
   local pdf = torch.cmax(torch.sum(g_rpb, 3), 1e-40)
+  --local pdf = torch.sum(g_rpb, 3)
 
   -- do the loss the gradients
   local loss = - torch.sum(torch.cmul(torch.log(pdf), (self.LW[{{},{},1}]))) -- loss of pixels, Mixture of Gaussians
@@ -166,6 +168,7 @@ function crit:updateOutput(input, target)
     grad_g_cov[{{}, 1}] = grad_g_clk[{{},2,1}]
     grad_g_cov[{{}, 2}] = grad_g_clk[{{},3,1}]
     grad_g_cov[{{}, 3}] = grad_g_clk[{{},3,2}]
+    grad_g_cov = grad_g_cov:mul(0.000)
     grad_g_cov = grad_g_cov:view(D, N, -1)
   else
     grad_g_var = torch.cmul(g_var, grad_g_sigma):mul(2)
@@ -230,9 +233,9 @@ function crit:sample(input, temperature, gt_pixels)
     g_clk[{{}, 1, 1}] = g_var[{{}, 1}]
     g_clk[{{}, 2, 2}] = g_var[{{}, 2}]
     g_clk[{{}, 3, 3}] = g_var[{{}, 3}]
-    g_clk[{{}, 2, 1}] = g_cov_input[{{}, 1}]
-    g_clk[{{}, 3, 1}] = g_cov_input[{{}, 2}]
-    g_clk[{{}, 3, 2}] = g_cov_input[{{}, 3}]
+    --g_clk[{{}, 2, 1}] = g_cov_input[{{}, 1}]
+    --g_clk[{{}, 3, 1}] = g_cov_input[{{}, 2}]
+    --g_clk[{{}, 3, 2}] = g_cov_input[{{}, 3}]
     g_clk = g_clk:view(N, nm, ps, ps)
   else
     g_clk = g_var
@@ -257,6 +260,7 @@ function crit:sample(input, temperature, gt_pixels)
     local p = mvn.rnd(g_mean[{b, mix_idx[{b,1}], {}}], g_clk[{b, mix_idx[{b,1}], {},{}}])
     pixels[b] = p
   end
+  --pixels:clamp(-0.5, 0.5)
 
   -- evaluate the loss
   local losses

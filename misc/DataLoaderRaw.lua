@@ -41,7 +41,7 @@ function DataLoaderRaw:__init(opt)
   print(self.files)
 
   -- how about working on the first texture? D1.png
-  self.iterator = 6
+  self.iterator = 12
   self.images = {}
   print('training on image: '..self.files[self.iterator])
   if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end

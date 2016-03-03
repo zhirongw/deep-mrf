@@ -163,6 +163,7 @@ local function gradCheckCrit()
   --local borders = torch.ge(torch.rand(opt.seq_length, opt.batch_size, 1), 0.5):type(pixels:type())
   --local seq = torch.cat(pixels, borders, 3):type(dtype)
 
+  local gmmsc = gmms:clone()
   -- evaluate the analytic gradient
   local loss = crit:forward(gmms, targets)
   local gradInput = crit:backward(gmms, targets)
@@ -173,16 +174,16 @@ local function gradCheckCrit()
     return loss
   end
 
-  local gradInput_num = gradcheck.numeric_gradient(f, gmms, 1, 1e-6)
+  local gradInput_num = gradcheck.numeric_gradient(f, gmmsc, 1, 1e-6)
 
   print(gradInput)
   print(gradInput_num)
-  --local g = gradInput:view(-1)
-  --local gn = gradInput_num:view(-1)
-  --for i=1,g:nElement() do
-  --  local r = gradcheck.relative_error(g[i],gn[i])
-  --  print(i, g[i], gn[i], r)
-  --end
+  local g = gradInput:view(-1)
+  local gn = gradInput_num:view(-1)
+  for i=1,g:nElement() do
+    local r = gradcheck.relative_error(g[i],gn[i])
+    print(i, g[i], gn[i], r)
+  end
   tester:assertTensorEq(gradInput, gradInput_num, 1e-4)
   tester:assertlt(gradcheck.relative_error(gradInput, gradInput_num, 1e-8), 5e-4)
 end
