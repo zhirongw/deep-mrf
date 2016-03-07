@@ -102,6 +102,9 @@ function crit:updateOutput(input, target)
     g_clk[{{}, 2, 1}] = g_cov_input[{{}, 1}]
     g_clk[{{}, 3, 1}] = g_cov_input[{{}, 2}]
     g_clk[{{}, 3, 2}] = g_cov_input[{{}, 3}]
+    print(torch.mean(g_var[{{},1}]))
+    print(torch.mean(g_var[{{},2}]))
+    print(torch.mean(g_var[{{},3}]))
     g_clk_T = g_clk:transpose(2,3)
     g_sigma = self.var_mm:forward({g_clk, g_clk_T})
   else
@@ -164,6 +167,10 @@ function crit:updateOutput(input, target)
     grad_g_var[{{}, 2}] = grad_g_clk[{{},2,2}]
     grad_g_var[{{}, 3}] = grad_g_clk[{{},3,3}]
     grad_g_var = self.var_exp:backward(g_var_input, grad_g_var)
+    print('--------------grad------------------------')
+    print(torch.mean(torch.abs(grad_g_var[{{},1}])))
+    print(torch.mean(torch.abs(grad_g_var[{{},2}])))
+    print(torch.mean(torch.abs(grad_g_var[{{},3}])))
     grad_g_var = grad_g_var:view(D, N, -1)
     grad_g_cov[{{}, 1}] = grad_g_clk[{{},2,1}]
     grad_g_cov[{{}, 2}] = grad_g_clk[{{},3,1}]
