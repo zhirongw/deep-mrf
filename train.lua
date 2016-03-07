@@ -3,6 +3,7 @@ require 'nn'
 require 'nngraph'
 -- local imports
 require 'pm'
+require 'rgb'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
 require 'misc.optim_updates'
@@ -28,8 +29,11 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 
 -- Model settings
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
+cmd:option('-rgb_rnn_size',100,'size of the rgb rnn')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
+cmd:option('-rgb_num_layers',1,'number of layers in rgb RNN/LSTMs')
 cmd:option('-num_mixtures',10,'number of gaussian mixtures to encode the output pixel')
+cmd:option('-encoding_size',100,'output of the pixel rnn encoding RGB infos')
 cmd:option('-patch_size',15,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-num_neighbors',3,'number of neighbors for each pixel')
 cmd:option('-border_init', 0, 'value to init the pixel on the border.')
@@ -102,7 +106,9 @@ if string.len(opt.start_from) > 0 then
   protos = loaded_checkpoint.protos
   local pm_modules = protos.pm:getModulesList()
   for k,v in pairs(pm_modules) do net_utils.unsanitize_gradients(v) end
-  protos.crit = nn.PixelModelCriterion(protos.pm.pixel_size, protos.pm.num_mixtures,
+  local rgb_modules = protos.rgb:getModulesList()
+  for k,v in pairs(rgb_modules) do net_utils.unsanitize_gradients(v) end
+  protos.crit = nn.PixelModelCriterion(1, protos.rgb.num_mixtures,
                   {policy=loaded_checkpoint.opt.loss_policy, val=loaded_checkpoint.opt.loss_decay}) -- not in checkpoints, create manually
   iter = loaded_checkpoint.iter
 else
@@ -121,6 +127,7 @@ else
   pmOpt.num_neighbors = opt.num_neighbors
   pmOpt.border_init = opt.border_init
   pmOpt.output_back = opt.output_back
+  pmOpt.encoding_size = opt.encoding_size
   if opt.num_neighbors == 2 then
     protos.pm = nn.PixelModel(pmOpt)
   elseif opt.num_neighbors == 3 then
@@ -130,8 +137,16 @@ else
   else
     print('the number of neighbors should be between 2 - 4')
   end
+  local rgbOpt = {}
+  rgbOpt.rnn_size = opt.rgb_rnn_size
+  rgbOpt.num_layers = opt.rgb_num_layers
+  rgbOpt.num_mixtures = opt.num_mixtures
+  rgbOpt.seq_length = 3
+  rgbOpt.mult_in = false
+  rgbOpt.encoding_size = opt.encoding_size
+  protos.rgb = nn.RGBModel(rgbOpt)
   -- criterion for the pixel model
-  protos.crit = nn.PixelModelCriterion(pmOpt.pixel_size, pmOpt.num_mixtures,
+  protos.crit = nn.PixelModelCriterion(1, pmOpt.num_mixtures,
                   {policy=opt.loss_policy, val=opt.loss_decay})
 end
 
@@ -143,6 +158,9 @@ end
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
 print('Number of pixels in the neighbor: ', opt.num_neighbors)
 print('Hidden nodes in each layer: ', opt.rnn_size)
+print('Pixel encoding size: ', opt.encoding_size)
+print('RGB rnn number of layers: ', opt.rgb_num_layers)
+print('RGB rnn size: ', opt.rgb_rnn_size)
 print('Number of mixtures for output gaussians: ', opt.num_mixtures)
 print('The input image local patch size: ', opt.patch_size)
 print('Input channel dimension: ', opt.color*2+1)
@@ -151,22 +169,31 @@ print('Border pixel init: ', opt.border_init)
 print('Training batch size: ', opt.batch_size)
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
+local params_rgb, grad_params_rgb = protos.rgb:getParameters()
 print('total number of parameters in PM: ', params:nElement())
 assert(params:nElement() == grad_params:nElement())
+print('total number of parameters in COLOR: ', params_rgb:nElement())
+assert(params_rgb:nElement() == grad_params_rgb:nElement())
 
 -- construct thin module clones that share parameters with the actual
 -- modules. These thin module will have no intermediates and will be used
 -- for checkpointing to write significantly smaller checkpoint files
 local thin_pm = protos.pm:clone()
 thin_pm.core:share(protos.pm.core, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
+local thin_rgb = protos.rgb:clone()
+thin_rgb.core:share(protos.rgb.core, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
+thin_rgb.lookup_matrix:share(protos.rgb.lookup_matrix, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
 local pm_modules = thin_pm:getModulesList()
 for k,v in pairs(pm_modules) do net_utils.sanitize_gradients(v) end
+local rgb_modules = thin_rgb:getModulesList()
+for k,v in pairs(rgb_modules) do net_utils.sanitize_gradients(v) end
 
 -- create clones and ensure parameter sharing. we have to do this
 -- all the way here at the end because calls such as :cuda() and
 -- :getParameters() reshuffle memory around.
 protos.pm:createClones()
+protos.rgb:createClones()
 
 collectgarbage() -- "yeah, sure why not"
 -------------------------------------------------------------------------------
@@ -174,6 +201,7 @@ collectgarbage() -- "yeah, sure why not"
 -------------------------------------------------------------------------------
 local function eval_split(n)
   protos.pm:evaluate()
+  protos.rgb:evaluate()
   --loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
   local loss_sum = 0
   local i = 0
@@ -185,8 +213,11 @@ local function eval_split(n)
                                 border = opt.border_init, noise = opt.noise}
 
     -- forward the model to get loss
-    local gmms = protos.pm:forward(data.pixels)
-    --print(gmms)
+    local features = protos.pm:forward(data.pixels)
+
+    features = features:view(-1, opt.encoding_size)
+    local gmms = protos.rgb:forward({features, data.targets})
+
     local loss = protos.crit:forward(gmms, data.targets)
     loss_sum = loss_sum + loss
 
@@ -202,7 +233,9 @@ end
 -------------------------------------------------------------------------------
 local function lossFun()
   protos.pm:training()
+  protos.rgb:training()
   grad_params:zero()
+  grad_params_rgb:zero()
 
   -----------------------------------------------------------------------------
   -- Forward pass
@@ -214,8 +247,10 @@ local function lossFun()
                               border = opt.border_init, noise = opt.noise}
 
   -- forward the pixel model
-  local gmms = protos.pm:forward(data.pixels)
+  local features = protos.pm:forward(data.pixels)
   --print('Forward time: ' .. timer:time().real .. ' seconds')
+  features = features:view(-1, opt.encoding_size)
+  local gmms = protos.rgb:forward({features, data.targets})
   -- forward the pixel model criterion
   local loss = protos.crit:forward(gmms, data.targets)
 
@@ -225,17 +260,21 @@ local function lossFun()
   -- backprop criterion
   local dgmms = protos.crit:backward(gmms, data.targets)
   --print('Criterion time: ' .. timer:time().real .. ' seconds')
+  local dfeatures = protos.rgb:backward({features, data.targets}, dgmms)
+  dfeatures = dfeatures[1]:view(protos.pm.seq_length, opt.batch_size, opt.encoding_size)
   -- backprop pixel model
-  local dpixels = protos.pm:backward(data.pixels, dgmms)
+  local dpixels = protos.pm:backward(data.pixels, dfeatures)
   --print('Backward time: ' .. timer:time().real .. ' seconds')
 
   -- normalize the gradients for different directions
   if opt.grad_norm then
     protos.pm:norm_grad(grad_params)
+    protos.rgb:norm_grad(grad_params)
   end
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
   grad_params:clamp(-opt.grad_clip, opt.grad_clip)
+  grad_params_rgb:clamp(-opt.grad_clip, opt.grad_clip)
 
   -----------------------------------------------------------------------------
   -- and lets get out!
@@ -248,6 +287,7 @@ end
 -------------------------------------------------------------------------------
 local loss0
 local optim_state = {}
+local optim_state_rgb = {}
 local loss_history = {}
 local val_loss_history = {}
 local best_score
@@ -287,6 +327,7 @@ while true do
     -- include the protos (which have weights) and save to file
     local save_protos = {}
     save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
+    save_protos.rgb = thin_rgb -- these are shared clones, and point to correct param storage
     checkpoint.protos = save_protos
     torch.save(checkpoint_path .. '.t7', checkpoint)
     print('wrote checkpoint to ' .. checkpoint_path .. '.t7')
@@ -308,6 +349,22 @@ while true do
     sgdmom(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
   elseif opt.optim == 'adam' then
     adam(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
+  else
+    error('bad option opt.optim')
+  end
+
+  if opt.optim == 'rmsprop' then
+    rmsprop(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state_rgb)
+  elseif opt.optim == 'adagrad' then
+    adagrad(params_rgb, grad_params_rgb, learning_rate, opt.optim_epsilon, optim_state_rgb)
+  elseif opt.optim == 'sgd' then
+    sgd(params_rgb, grad_params_rgb, opt.learning_rate)
+  elseif opt.optim == 'sgdm' then
+    sgdm(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, optim_state_rgb)
+  elseif opt.optim == 'sgdmom' then
+    sgdmom(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, optim_state_rgb)
+  elseif opt.optim == 'adam' then
+    adam(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state_rgb)
   else
     error('bad option opt.optim')
   end

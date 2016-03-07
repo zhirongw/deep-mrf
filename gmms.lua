@@ -13,12 +13,7 @@ function crit:__init(pixel_size, num_mixtures, opt)
   parent.__init(self)
   self.pixel_size = pixel_size
   self.num_mixtures = num_mixtures
-    if self.pixel_size == 3 then
-    self.output_size = self.num_mixtures * (3+3+3+1)
-  else
-    self.output_size = self.num_mixtures * (1+1+0+1)
-  end
-  if pixel_size == 3 then self.var_mm = nn.MM() end
+  self.output_size = self.num_mixtures * (1+1+0+1)
   self.w_softmax = nn.SoftMax()
   self.var_exp = nn.Exp()
   self.opt = opt
@@ -130,6 +125,8 @@ function crit:updateOutput(input, target)
 
   -- do the loss the gradients
   local loss = - torch.sum(torch.cmul(torch.log(pdf), (self.LW[{{},{},1}]))) -- loss of pixels, Mixture of Gaussians
+  local loss_rgb = - torch.squeeze(torch.mean(torch.log(pdf),2))
+  print(loss_rgb[1], loss_rgb[2], loss_rgb[3])
 
   g_rpb = g_rpb:cmul(self.LW)
   local grad_g_w = - torch.cdiv(g_rpb, torch.repeatTensor(pdf,1,1,nm))

@@ -41,7 +41,7 @@ function DataLoaderRaw:__init(opt)
   print(self.files)
 
   -- how about working on the first texture? D1.png
-  self.iterator = 20
+  self.iterator = 14
   self.images = {}
   print('training on image: '..self.files[self.iterator])
   if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end
@@ -55,6 +55,7 @@ function DataLoaderRaw:__init(opt)
   if self.nChannels == 3 then
     --img = image.rgb2yuv(img)
     --img = img[{{2}}]
+    img:add(opt.shift)
   else
     img:add(opt.shift)
   end
@@ -65,7 +66,7 @@ function DataLoaderRaw:__init(opt)
   self.nWidth = img:size(3)
 
   if self.nChannels == 3 then
-    self:whitening()
+    --self:whitening()
   end
 end
 
@@ -164,7 +165,7 @@ function DataLoaderRaw:getBatch(opt)
   -- prepare the targets
   local targets = patches[{{},{},{2,patch_size+1},{2,patch_size+1}}]:clone()
   targets = targets:view(batch_size, self.nChannels, -1)
-  targets = targets:permute(3, 1, 2):contiguous()
+  targets = targets:permute(2, 3, 1):contiguous()
   -- prepare the inputs. -n1, left, n2, up, n3, right, n4 down.
   local n1, n2, n3, n4, inputs
   n1 = patches[{{},{},{2,patch_size+1},{1,patch_size}}]:clone()
@@ -194,7 +195,7 @@ function DataLoaderRaw:getBatch(opt)
 
   local data = {}
   data.pixels = inputs
-  data.targets = targets
+  data.targets = targets:view(self.nChannels, -1, 1)
   if opt.noise > 0 then
     data.pixels:add(torch.randn(inputs:size())*opt.noise)
   end

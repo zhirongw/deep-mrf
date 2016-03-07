@@ -7,6 +7,7 @@ and that everything gradient checks.
 
 require 'torch'
 require 'pm'
+require 'rgb'
 
 local gradcheck = require 'misc.gradcheck'
 
@@ -139,6 +140,56 @@ local function gradCheckPM()
 
   tester:assertTensorEq(gradInput, gradInput_num, 1e-4)
   tester:assertlt(gradcheck.relative_error(gradInput, gradInput_num, 1e-8), 1e-4)
+end
+
+-- test just the language model alone (without the criterion)
+local function gradCheckRGB()
+
+  local dtype = 'torch.DoubleTensor'
+  local opt = {}
+  opt.pixel_size = 1
+  opt.num_mixtures = 2
+  opt.encoding_size = 10
+  opt.rnn_size = 8
+  opt.num_layers = 2
+  opt.dropout = 0
+  opt.seq_length = 3
+  opt.batch_size = 5
+  opt.mult_in = false
+  local rgb = nn.RGBModel(opt)
+  rgb:type(dtype)
+
+  local features = torch.rand(opt.batch_size, opt.encoding_size)
+  local pixels = torch.rand(opt.seq_length, opt.batch_size, opt.pixel_size)
+
+  -- evaluate the analytic gradient
+  local output = rgb:forward({features,pixels})
+  local w = torch.randn(output:size())
+  -- generate random weighted sum criterion
+  local loss = torch.sum(torch.cmul(output, w))
+  local gradOutput = w
+  local gradInput = rgb:backward({features, pixels}, gradOutput)
+
+  -- create a loss function wrapper
+  local function f(x)
+    local output = rgb:forward({x, pixels})
+    local loss = torch.sum(torch.cmul(output, w))
+    return loss
+  end
+
+  local gradInput_num = gradcheck.numeric_gradient(f, features, 1, 1e-6)
+
+  print(gradInput)
+  -- print(gradInput_num)
+  -- local g = gradInput:view(-1)
+  -- local gn = gradInput_num:view(-1)
+  -- for i=1,g:nElement() do
+  --   local r = gradcheck.relative_error(g[i],gn[i])
+  --   print(i, g[i], gn[i], r)
+  -- end
+
+  tester:assertTensorEq(gradInput[1], gradInput_num, 1e-4)
+  tester:assertlt(gradcheck.relative_error(gradInput[1], gradInput_num, 1e-8), 1e-4)
 end
 
 local function gradCheckCrit()
@@ -345,7 +396,8 @@ end
 --tests.floatApiForwardTest = forwardApiTestFactory('torch.FloatTensor')
 -- tests.cudaApiForwardTest = forwardApiTestFactory('torch.CudaTensor')
 --tests.gradCheckPM = gradCheckPM
-tests.gradCheckCrit = gradCheckCrit
+tests.gradCheckRGB = gradCheckRGB
+--tests.gradCheckCrit = gradCheckCrit
 --tests.gradCheck = gradCheck
 -- tests.overfit = overfit
 --tests.sample = sample

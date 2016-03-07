@@ -18,18 +18,13 @@ function layer:__init(opt)
   assert(self.pixel_size == 1 or self.pixel_size == 3, 'image can only have either 1 or 3 channels')
   self.rnn_size = utils.getopt(opt, 'rnn_size')
   self.num_layers = utils.getopt(opt, 'num_layers', 3)
-  self.num_mixtures = utils.getopt(opt, 'num_mixtures')
   local dropout = utils.getopt(opt, 'dropout', 0)
   -- options for Pixel Model
   self.recurrent_stride = utils.getopt(opt, 'recurrent_stride')
   self.seq_length = utils.getopt(opt, 'seq_length')
   self.mult_in = utils.getopt(opt, 'mult_in')
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
-  if self.pixel_size == 3 then
-    self.output_size = self.num_mixtures * (3+3+3+1)
-  else
-    self.output_size = self.num_mixtures * (1+1+0+1)
-  end
+  self.output_size = utils.getopt(opt, 'encoding_size')
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
   self.core = LSTM.lstm2d(self.pixel_size*self.num_neighbors, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
@@ -210,7 +205,6 @@ function layer:__init(opt)
   assert(self.pixel_size == 1 or self.pixel_size == 3, 'image can only have either 1 or 3 channels')
   self.rnn_size = utils.getopt(opt, 'rnn_size')
   self.num_layers = utils.getopt(opt, 'num_layers', 3)
-  self.num_mixtures = utils.getopt(opt, 'num_mixtures')
   local dropout = utils.getopt(opt, 'dropout', 0)
   -- options for Pixel Model
   self.recurrent_stride = utils.getopt(opt, 'recurrent_stride')
@@ -219,11 +213,7 @@ function layer:__init(opt)
   self.num_neighbors = utils.getopt(opt, 'num_neighbors')
   self.border_init = utils.getopt(opt, 'border_init')
   self.input_size = self.pixel_size*self.num_neighbors
-  if self.pixel_size == 3 then
-    self.output_size = self.num_mixtures * (3+3+3+1)
-  else
-    self.output_size = self.num_mixtures * (1+1+0+1)
-  end
+  self.output_size = utils.getopt(opt, 'encoding_size')
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
   self.core = LSTM.lstm3d(self.input_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
@@ -466,7 +456,6 @@ function layer:__init(opt)
   assert(self.pixel_size == 1 or self.pixel_size == 3, 'image can only have either 1 or 3 channels')
   self.rnn_size = utils.getopt(opt, 'rnn_size')
   self.num_layers = utils.getopt(opt, 'num_layers', 3)
-  self.num_mixtures = utils.getopt(opt, 'num_mixtures')
   local dropout = utils.getopt(opt, 'dropout', 0)
   -- options for Pixel Model
   self.recurrent_stride = utils.getopt(opt, 'recurrent_stride')
@@ -476,11 +465,7 @@ function layer:__init(opt)
   self.border_init = utils.getopt(opt, 'border_init')
   self.output_back = utils.getopt(opt, 'output_back')
   self.input_size = self.pixel_size*self.num_neighbors
-  if self.pixel_size == 3 then
-    self.output_size = self.num_mixtures * (3+3+3+1)
-  else
-    self.output_size = self.num_mixtures * (1+1+0+1)
-  end
+  self.output_size = utils.getopt(opt, 'encoding_size')
   -- create the core lstm network.
   -- mult_in for multiple input to deep layer connections.
   self.core = LSTM.lstm4d(self.input_size, self.output_size, self.rnn_size, self.num_layers, dropout, self.mult_in)
