@@ -414,6 +414,7 @@ else
   print('not implemented')
 end
 
+local transform = checkpoint.opt.data_info
 -- output the sampled images
 --local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
 local images_cpu = images
@@ -422,9 +423,18 @@ images_cpu = images_cpu[{{}, {}, {patch_size+1, pm.recurrent_stride},{patch_size
 --images_cpu = images_cpu:clamp(0,1):mul(255):type('torch.ByteTensor')
 for i=1,batch_size do
   local filename = path.join('samples', i .. '_b.png')
-  local im = images_cpu[i]
-  im[1]:add(-shift)
-  im = image.yuv2rgb(im)
+  local im = images_cpu[i]:clone()
+  if pm.pixel_size == 3 then
+    local h = im:size(2)
+    local w = im:size(3)
+    im = im:view(3, -1)
+    im = torch.mm(transform.affine, im)
+    im = torch.add(im, torch.repeatTensor(transform.mu, 1, h*w))
+    im = im:view(3, h, w)
+    --im = image.yuv2rgb(im)
+  else
+    im:add(-shift)
+  end
   im = im:clamp(0,1):mul(255):type('torch.ByteTensor')
   image.save(filename, im)
 end

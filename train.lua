@@ -89,7 +89,7 @@ end
 -------------------------------------------------------------------------------
 local loader = DataLoaderRaw{folder_path = opt.folder_path, shift = opt.input_shift,
                             img_size = opt.image_size, color = opt.color}
-
+opt.data_info = loader:getChannelScale()
 -------------------------------------------------------------------------------
 -- Initialize the networks
 -------------------------------------------------------------------------------

@@ -41,34 +41,94 @@ function DataLoaderRaw:__init(opt)
   print(self.files)
 
   -- how about working on the first texture? D1.png
-  self.iterator = 5
+  self.iterator = 20
   self.images = {}
   print('training on image: '..self.files[self.iterator])
   if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end
 
+  --self.nChannels = 3
   local img = image.load(self.files[self.iterator], self.nChannels, 'float')
   if img:dim() == 2 then img = img:resize(1, img:size(1), img:size(2)) end
   if img:size(2) > opt.img_size or img:size(3) > opt.img_size then
     img = image.scale(img, opt.img_size)
   end
   if self.nChannels == 3 then
-    img = image.rgb2yuv(img)
-    img[1]:add(opt.shift)
+    --img = image.rgb2yuv(img)
+    --img = img[{{2}}]
   else
     img:add(opt.shift)
   end
+  --self.nChannels = 1
 
   self.images[self.iterator] = img
   self.nHeight = img:size(2)
   self.nWidth = img:size(3)
+
+  if self.nChannels == 3 then
+    self:whitening()
+  end
 end
 
+function DataLoaderRaw:whitening()
+  -- calculate the mean and covariance matrix of the whole dataset
+  local ps = self.nChannels
+  local imgs
+  for idx, img in pairs(self.images) do
+    if imgs == nil then
+      imgs = img:clone():view(ps, -1)
+    else
+      imgs = torch.cat(imgs, img:view(ps, -1))
+    end
+  end
+  self.mu = torch.mean(imgs, 2)
+  --print(self.mu)
+  imgs = torch.add(imgs, -1, torch.repeatTensor(self.mu, 1, imgs:size(2)))
+  local sigma = torch.mm(imgs, imgs:transpose(1, 2)):div(imgs:size(2))
+  --print(sigma)
+  local U, S, V = torch.svd(sigma)
+  --print(U, S, V)
+  local affine = S:add(1e-20):sqrt():cinv()*0.1
+  local affine_inv = torch.ones(ps):cdiv(affine)
+  affine = torch.diag(affine)
+  affine_inv = torch.diag(affine_inv)
+  --print(affine)
+  affine = torch.mm(affine, U:transpose(1,2))
+  affine_inv = torch.mm(U, affine_inv)
+  --print(affine)
+  self.affine = affine
+  self.affine_inv = affine_inv
+  --local I = torch.mm(affine, affine_inv)
+  --print(I)
+
+  -- transform every image
+  for idx, img in pairs(self.images) do
+    local h = img:size(2)
+    local w = img:size(3)
+    img = torch.add(img:view(ps, -1), -1, torch.repeatTensor(self.mu, 1, h*w))
+    img = torch.mm(self.affine, img)
+    self.images[idx] = img:view(ps, h, w)
+    -- for debugging
+    local s = torch.mm(img, img:transpose(1,2)):div(h*w)
+    print(s)
+    print(torch.max(img[1]))
+    print(torch.min(img[1]))
+    print(torch.max(img[2]))
+    print(torch.min(img[2]))
+    print(torch.max(img[3]))
+    print(torch.min(img[3]))
+  end
+
+end
 function DataLoaderRaw:resetIterator()
   --self.iterator = 1
 end
 
 function DataLoaderRaw:getChannelSize()
   return self.nChannels
+end
+
+function DataLoaderRaw:getChannelScale()
+  return {mu = self.mu, affine = self.affine_inv}
 end
 
 --[[
