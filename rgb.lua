@@ -1,12 +1,13 @@
 require 'nn'
 require 'gmms'
+require 'pm'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
 local LSTM = require 'lstm'
 local mvn = require 'misc.mvn'
 
 -------------------------------------------------------------------------------
--- PIXEL Model core
+-- COLOR Model core
 -------------------------------------------------------------------------------
 
 local layer, parent = torch.class('nn.RGBModel', 'nn.Module')
@@ -98,6 +99,41 @@ function layer:evaluate()
   for k,v in pairs(self.lookup_matrices) do v:evaluate() end
 end
 
+function layer:sample(features, temperature, gt)
+  if self.gmms == nil then self.gmms = nn.PixelModelCriterion(1, self.num_mixtures) end
+  if self.clones == nil then self:createClones() end
+  local batch_size = features:size(1)
+  self:_createInitState(batch_size)
+  self._states = {[0] = self.init_state}
+  self._inputs = {}
+  local pixels = gt:clone():fill(0)
+  local losses = 0
+  local train_losses = 0
+  -- loop through each timestep
+  for t=1,self.seq_length do
+    local xt
+    if t == 1 then
+      xt = features
+    else
+      xt = self.lookup_matrices[t-1]:forward(pixels[t-1])
+    end
+    -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
+    self._inputs[t] = {xt,unpack(self._states[t-1])}
+    -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
+    local lsts = self.clones[t]:forward(self._inputs[t])
+    -- save the state
+    self._states[t] = {}
+    for i=1,self.num_state do table.insert(self._states[t], lsts[i]) end
+    local gmms = lsts[#lsts]
+    local pixel, loss, train_loss = self.gmms:sample(gmms, temperature, gt[t])
+    pixels[t] = pixel
+    losses = losses + loss
+    train_losses = train_losses + train_loss
+  end
+  losses = losses / self.seq_length
+  train_losses = train_losses / self.seq_length
+  return pixels, losses, train_losses
+end
 --[[
 Implements the FORWARD of the PixelModel module
 input: pixel input sequence

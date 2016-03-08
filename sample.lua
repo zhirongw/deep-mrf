@@ -4,6 +4,7 @@ require 'nngraph'
 require 'image'
 -- local imports
 require 'pm'
+require 'rgb'
 require 'gmms'
 local utils = require 'misc.utils'
 --require 'misc.DataLoader'
@@ -73,11 +74,13 @@ protos.pm.recurrent_stride = patch_size + opt.img_size
 protos.pm.seq_length = protos.pm.recurrent_stride * protos.pm.recurrent_stride
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
-local crit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures)
+local rgb = protos.rgb
 pm.core:evaluate()
+rgb.core:evaluate()
+rgb.lookup_matrix:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
 print('Number of neighbors used: ', pm.num_neighbors)
-print('Number of mixtures used: ', pm.num_mixtures)
+print('Number of mixtures used: ', rgb.num_mixtures)
 print('rnn size: ', pm.rnn_size)
 
 -- prepare the empty states
@@ -95,9 +98,9 @@ local images = torch.Tensor(batch_size, pm.pixel_size, pm.recurrent_stride, pm.r
 ------------------ debug ------------------------
 local img = image.load('imgs/D1.png', pm.pixel_size, 'float')
 if pm.pixel_size == 1 then
-  img = img:resize(1, pm.pixel_size, img:size(1), img:size(2))
+  img = img:resize(pm.pixel_size, 1, img:size(1), img:size(2))
 else
-  img = img:resize(1, pm.pixel_size, img:size(2), img:size(3))
+  img = img:resize(pm.pixel_size, 1, img:size(2), img:size(3))
 end
 --img = image.scale(img, 256, 256):resize(1, pm.pixel_size, 256, 256)
 img = img[{{}, {}, {1, pm.recurrent_stride},{1, pm.recurrent_stride}}]:contiguous()
@@ -110,7 +113,7 @@ local function sample2n()
   local train_loss_sum = 0
 
   local pixel
-  local gmms
+  local features
   -- loop through each timestep
   for h=1,pm.recurrent_stride do
     for w=1,pm.recurrent_stride do
@@ -147,11 +150,12 @@ local function sample2n()
       -- save the state
       states[w] = {}
       for i=1,pm.num_state do table.insert(states[w], lsts[i]:clone()) end
-      gmms = lsts[#lsts]
+      features = lsts[#lsts]
 
       -- sampling
       local train_pixel = img[{{}, {}, h, w}]:clone()
-      pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
+      train_pixel = train_pixel:view(3, -1, 1)
+      pixel, loss, train_loss = rgb:sample(features, temperature, train_pixel)
       --pixel = train_pixel
       images[{{},{},h,w}] = pixel
       loss_sum = loss_sum + loss
@@ -173,7 +177,7 @@ local function sample3n()
   local train_loss_sum = 0
 
   local pixel
-  local gmms
+  local features
   -- loop through each timestep
   for h=1,pm.recurrent_stride do
     for w=1,pm.recurrent_stride do
@@ -217,13 +221,14 @@ local function sample3n()
       -- save the state
       states[ww] = {}
       for i=1,pm.num_state do table.insert(states[ww], lsts[i]:clone()) end
-      gmms = lsts[#lsts]
+      features = lsts[#lsts]
 
       -- sampling
       local train_pixel = img[{{}, {}, h, ww}]:clone():add(shift)
-      pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
+      train_pixel = train_pixel:view(3, -1, 1)
+      pixel, loss, train_loss = rgb:sample(features, temperature, train_pixel)
       --if h < patch_size then pixel = train_pixel end
-      images[{{},{},h,ww}] = pixel
+      images[{{},{},h,ww}] = pixel:permute(2,1,3):contiguous()
       loss_sum = loss_sum + loss
       train_loss_sum = train_loss_sum + train_loss
     end
@@ -241,7 +246,7 @@ end
 local function sample4n()
   images = images:view(batch_size, pm.pixel_size, -1)
   images = torch.repeatTensor(images, 1, 1, 2)
-  img = img:view(batch_size, pm.pixel_size, -1)
+  img = img:view(pm.pixel_size, batch_size, -1)
   img = torch.repeatTensor(img, 1, 1, 2)
   pm:_buildIndex()
 
@@ -300,7 +305,7 @@ local function sample4n()
     local train_pixel = img[{{}, {}, pi}]:clone()
     pixel, loss, train_loss = crit:sample(gmms, temperature, train_pixel)
     --pixel = train_pixel
-    images[{{},{},pi}] = pixel
+    images[{{},{},pi}] = pixel:permute(2,1,3):contiguous()
     loss_sum_f = loss_sum_f + loss
     train_loss_sum_f = train_loss_sum_f + train_loss
   end
@@ -414,7 +419,6 @@ else
   print('not implemented')
 end
 
-local transform = checkpoint.opt.data_info
 -- output the sampled images
 --local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
 local images_cpu = images
@@ -425,13 +429,14 @@ for i=1,batch_size do
   local filename = path.join('samples', i .. '_b.png')
   local im = images_cpu[i]:clone()
   if pm.pixel_size == 3 then
-    local h = im:size(2)
-    local w = im:size(3)
-    im = im:view(3, -1)
-    im = torch.mm(transform.affine, im)
-    im = torch.add(im, torch.repeatTensor(transform.mu, 1, h*w))
-    im = im:view(3, h, w)
+    --local h = im:size(2)
+    --local w = im:size(3)
+    --im = im:view(3, -1)
+    --im = torch.mm(transform.affine, im)
+    --im = torch.add(im, torch.repeatTensor(transform.mu, 1, h*w))
+    --im = im:view(3, h, w)
     --im = image.yuv2rgb(im)
+    im:add(-shift)
   else
     im:add(-shift)
   end

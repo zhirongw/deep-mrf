@@ -41,7 +41,7 @@ function DataLoaderRaw:__init(opt)
   print(self.files)
 
   -- how about working on the first texture? D1.png
-  self.iterator = 14
+  self.iterator = 17
   self.images = {}
   print('training on image: '..self.files[self.iterator])
   if opt.color > 0 then self.nChannels = 3 else self.nChannels = 1 end
@@ -52,10 +52,11 @@ function DataLoaderRaw:__init(opt)
   if img:size(2) > opt.img_size or img:size(3) > opt.img_size then
     img = image.scale(img, opt.img_size)
   end
+  image.save('input.png', img)
   if self.nChannels == 3 then
-    --img = image.rgb2yuv(img)
+    img = image.rgb2yuv(img)
     --img = img[{{2}}]
-    img:add(opt.shift)
+    --img:add(opt.shift)
   else
     img:add(opt.shift)
   end
@@ -66,7 +67,7 @@ function DataLoaderRaw:__init(opt)
   self.nWidth = img:size(3)
 
   if self.nChannels == 3 then
-    --self:whitening()
+    self:whitening()
   end
 end
 
@@ -88,18 +89,18 @@ function DataLoaderRaw:whitening()
   --print(sigma)
   local U, S, V = torch.svd(sigma)
   --print(U, S, V)
-  local affine = S:add(1e-20):sqrt():cinv()*0.1
+  local affine = S:add(1e-8):sqrt():cinv()*0.2
   local affine_inv = torch.ones(ps):cdiv(affine)
   affine = torch.diag(affine)
   affine_inv = torch.diag(affine_inv)
   --print(affine)
-  affine = torch.mm(affine, U:transpose(1,2))
-  affine_inv = torch.mm(U, affine_inv)
+  affine = torch.mm(U, torch.mm(affine, U:transpose(1,2)))
+  affine_inv = torch.mm(torch.mm(U, affine_inv), U:transpose(1,2))
   --print(affine)
   self.affine = affine
   self.affine_inv = affine_inv
-  --local I = torch.mm(affine, affine_inv)
-  --print(I)
+  local I = torch.mm(affine, affine_inv)
+  print(I)
 
   -- transform every image
   for idx, img in pairs(self.images) do
