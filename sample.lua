@@ -157,7 +157,7 @@ local function sample2n()
       train_pixel = train_pixel:view(3, -1, 1)
       pixel, loss, train_loss = rgb:sample(features, temperature, train_pixel)
       --pixel = train_pixel
-      images[{{},{},h,w}] = pixel
+      images[{{},{},h,w}] = pixel:permute(2,1,3):contiguous()
       loss_sum = loss_sum + loss
       train_loss_sum = train_loss_sum + train_loss
     end
@@ -419,6 +419,7 @@ else
   print('not implemented')
 end
 
+local transform = checkpoint.opt.data_info
 -- output the sampled images
 --local images_cpu = images:narrow(3, pm.seq_length+1, pm.seq_length)
 local images_cpu = images
@@ -429,14 +430,14 @@ for i=1,batch_size do
   local filename = path.join('samples', i .. '_b.png')
   local im = images_cpu[i]:clone()
   if pm.pixel_size == 3 then
-    --local h = im:size(2)
-    --local w = im:size(3)
-    --im = im:view(3, -1)
-    --im = torch.mm(transform.affine, im)
-    --im = torch.add(im, torch.repeatTensor(transform.mu, 1, h*w))
-    --im = im:view(3, h, w)
-    --im = image.yuv2rgb(im)
-    im:add(-shift)
+    local h = im:size(2)
+    local w = im:size(3)
+    im = im:view(3, -1)
+    im = torch.mm(transform.affine, im)
+    im = torch.add(im, torch.repeatTensor(transform.mu, 1, h*w))
+    im = im:view(3, h, w)
+    im = image.yuv2rgb(im)
+    --im:add(-shift)
   else
     im:add(-shift)
   end
