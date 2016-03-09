@@ -29,7 +29,7 @@ cmd:option('-start_from', '', 'path to a model checkpoint to initialize model we
 
 -- Model settings
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
-cmd:option('-rgb_rnn_size',100,'size of the rgb rnn')
+cmd:option('-rgb_rnn_size',200,'size of the rgb rnn')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
 cmd:option('-rgb_num_layers',1,'number of layers in rgb RNN/LSTMs')
 cmd:option('-num_mixtures',10,'number of gaussian mixtures to encode the output pixel')
