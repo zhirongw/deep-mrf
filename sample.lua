@@ -24,12 +24,12 @@ cmd:text('Options')
 -- Input paths
 cmd:option('-model','','path to model to evaluate')
 -- Sampling options
-cmd:option('-batch_size', 1, 'if > 0 then overrule, otherwise load from checkpoint.')
+cmd:option('-batch_size', 10, 'if > 0 then overrule, otherwise load from checkpoint.')
 cmd:option('-sample_max', 1, '1 = sample argmax words. 0 = sample from distributions.')
 cmd:option('-beam_size', 2, 'used when sample_max = 1, indicates number of beams in beam search. Usually 2 or 3 works well. More is not better. Set this to 1 for faster runtime but a bit worse performance.')
 cmd:option('-temperature', 1.0, 'temperature when sampling from distributions (i.e. when sample_max = 0). Lower = "safer" predictions.')
 -- For evaluation on a folder of images:
-cmd:option('-test_path', 'G/images/2', 'predict on the images in this folder path, only used for inpainting')
+cmd:option('-test_path', 'G/images/5', 'predict on the images in this folder path, only used for inpainting')
 cmd:option('-image_root', '', 'In case the image paths have to be preprended with a root path to an image folder')
 -- For evaluation on MSCOCO images from some split:
 cmd:option('-split', 'test', 'if running on MSCOCO images, which split to use: val|test|train')
@@ -75,7 +75,7 @@ local pm = protos.pm
 local im = protos.im
 local imcrit = nn.KLDCriterion()
 local pmcrit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures,
-            {policy=opt.loss_policy, val=opt.loss_decay, runs=1})
+            {policy=opt.loss_policy, val=opt.loss_decay})
 pm.core:evaluate()
 im:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
@@ -331,9 +331,9 @@ local loss_im = imcrit:forward(mean, var_log)
 -------------------------------------------------------------------------------
 --
 --local noise = torch.randn(batch_size, checkpoint.opt.latent_size):cuda()
---local features = im.decoder:forward(noise)
+--local features, dummy = unpack(im.decoder:forward(noise))
 
-local out = sample4n(dummy, images)
+local out = sample4n(features, images)
 local out_images = out[{{}, {}, 2, {},{}}]
 
 --local loss_pm = pmcrit:forward(out_images, images)

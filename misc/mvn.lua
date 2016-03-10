@@ -66,7 +66,7 @@ end
 function mvn.bnormlogpdf(x, sigma)
   assert(x:nElement() == sigma:nElement())
   local r = torch.cmul(x,x):mul(-0.5):cdiv(sigma):cdiv(sigma)
-  r:add(-0.5*math.pi)
+  r:add(-0.5 * math.log(2*math.pi))
   r:add(-1, torch.log(sigma))
   return r
 end

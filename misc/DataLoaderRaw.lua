@@ -52,7 +52,7 @@ function DataLoaderRaw:__init(opt)
     end
     self.images[i] = img:add(opt.shift)
   end
-  self.iterator = 10
+  self.iterator = 1
 end
 
 function DataLoaderRaw:resetIterator()

@@ -23,8 +23,8 @@ cmd:text('Options')
 
 cmd:option('-phase', 1,'phase 1: learning features, phase 2: learning pixels')
 -- Data input settings
-cmd:option('-train_path','G/images/2','path to the training data')
-cmd:option('-val_path','G/images/2','path to the val data')
+cmd:option('-train_path','G/images/5','path to the training data')
+cmd:option('-val_path','G/images/5','path to the val data')
 cmd:option('-color', 1, 'whether the input image is color image or grayscale image')
 --cmd:option('-input_h5','coco/data.h5','path to the h5file containing the preprocessed dataset')
 --cmd:option('-input_json','coco/data.json','path to the json file containing additional info and vocab')
@@ -49,10 +49,10 @@ cmd:option('-noise', 0, 'Input perturbation noise.')
 
 -- Optimization: General
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
-cmd:option('-im_batch_size',1,'number of images per batch')
-cmd:option('-pm_batch_size', 32,'number of patches per image per batch')
+cmd:option('-im_batch_size', 4,'number of images per batch')
+cmd:option('-pm_batch_size', 8,'number of patches per image per batch')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
-cmd:option('-drop_prob_pm', 0.5, 'strength of dropout in the Pixel Model')
+cmd:option('-drop_prob_pm', 0, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
 cmd:option('-output_back', false, 'For 4D model, feed the output of the first sweep to the next sweep')
 cmd:option('-grad_norm', false, 'whether to normalize the gradients for each direction')
@@ -60,16 +60,16 @@ cmd:option('-loss_policy', 'const', 'loss decay policy for spatial patch') -- ex
 cmd:option('-loss_decay', 0.9, 'loss decay rate for spatial patch')
 
 -- Optimization: for the Pixel Model
-cmd:option('-optim','rmsprop','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
-cmd:option('-learning_rate',1e-4,'learning rate')
+cmd:option('-optim','adam','what update to use? rmsprop|sgd|sgdmom|adagrad|adam')
+cmd:option('-learning_rate',1e-3,'learning rate')
 cmd:option('-learning_rate_decay_start', -1, 'at what iteration to start decaying learning rate? (-1 = dont)')
 cmd:option('-learning_rate_decay_every', 1000, 'every how many iterations thereafter to drop LR by half?')
-cmd:option('-optim_alpha',0.95,'alpha for adagrad/rmsprop/momentum/adam')
+cmd:option('-optim_alpha',0.90,'alpha for adagrad/rmsprop/momentum/adam')
 cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Optimization: for the VAE
-cmd:option('-vae_optim','rmsprop','optimization to use for VAE')
+cmd:option('-vae_optim','adam','optimization to use for VAE')
 cmd:option('-vae_optim_alpha',0.90,'alpha for momentum of VAE')
 cmd:option('-vae_optim_beta',0.999,'beta for momentum of VAE')
 cmd:option('-vae_learning_rate',1e-4,'learning rate for the VAE')
@@ -184,6 +184,7 @@ else
   pmOpt.num_layers = opt.num_layers
   pmOpt.dropout = opt.drop_prob_pm
   pmOpt.batch_size = opt.batch_size
+  pmOpt.num_mixtures = opt.num_mixtures
   pmOpt.recurrent_stride = opt.patch_size
   pmOpt.seq_length = opt.patch_size * opt.patch_size
   pmOpt.mult_in = opt.mult_in
@@ -351,6 +352,7 @@ local function lossFun()
   vae_grad_params:zero()
   grad_params:zero()
   print(params[1])
+  print(torch.mean(torch.abs(params)))
   print(vae_params[1])
   -----------------------------------------------------------------------------
   -- Forward pass
