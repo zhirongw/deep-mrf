@@ -6,7 +6,7 @@ local VAE = {}
 function VAE.get_encoder(latent_variable_size)
   -- The Encoder
   local encoder = nn.Sequential()
-  encoder:add(cudnn.SpatialConvolution(1, 32, 5, 5, 1, 1, 2, 2))
+  encoder:add(cudnn.SpatialConvolution(3, 32, 5, 5, 1, 1, 2, 2))
   encoder:add(nn.SpatialBatchNormalization(32))
   encoder:add(cudnn.SpatialMaxPooling(2,2))
   encoder:add(cudnn.ReLU(true))
@@ -54,7 +54,7 @@ function VAE.get_decoder(latent_variable_size, feature_size)
   decoder:add(cudnn.ReLU(true))
   two_outs = nn.ConcatTable()
   two_outs:add(nn.Identity())
-  two_outs:add(cudnn.SpatialConvolution(feature_size, 1, 3, 3, 1, 1, 1, 1))
+  two_outs:add(cudnn.SpatialConvolution(feature_size, 3, 3, 3, 1, 1, 1, 1))
   decoder:add(two_outs)
 
   return decoder

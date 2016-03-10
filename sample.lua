@@ -5,6 +5,7 @@ require 'image'
 -- local imports
 require 'pm'
 require 'im'
+require 'rgb'
 require 'kld'
 require 'gmms'
 require 'misc.DataLoaderRaw'
@@ -73,13 +74,18 @@ local temperature = opt.temperature
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
 local pm = protos.pm
 local im = protos.im
+local rgb = protos.rgb
 local imcrit = nn.KLDCriterion()
-local pmcrit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures,
-            {policy=opt.loss_policy, val=opt.loss_decay})
+--local pmcrit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures,
+--            {policy=opt.loss_policy, val=opt.loss_decay})
 pm.core:evaluate()
+rgb.core:evaluate()
+rgb.lookup_matrix:evaluate()
 im:evaluate()
 print('The loaded model is trained on patch size with: ', patch_size)
 print('Number of neighbors used: ', pm.num_neighbors)
+print('Number of mixtures used: ', rgb.num_mixtures)
+print('Feature size: ', checkpoint.opt.feature_size)
 
 -- prepare the empty states
 local init_state = {}
@@ -213,7 +219,7 @@ local function sample4n(features, gt)
     -- save the state
     states[t] = {}
     for i=1,pm.num_state do table.insert(states[t], lsts[i]:clone()) end
-    gmms = lsts[#lsts]
+    local rgb_features = lsts[#lsts]
     --print(gmms)
     -- sampling
     --local train_pixel = gt[{{}, {}, pi}]:clone()
@@ -297,14 +303,15 @@ local function sample4n(features, gt)
     -- save the state
     states[t+pm.seq_length] = {}
     for i=1,pm.num_state do table.insert(states[t+pm.seq_length], lsts[i]:clone()) end
-    gmms = lsts[#lsts]
+    local rgb_features = lsts[#lsts]
     --print(gmms)
 
     -- sampling
     local train_pixel = gt[{{}, {}, pi}]:clone()
-    pixel, loss, train_loss = pmcrit:sample(gmms, temperature, train_pixel)
+    train_pixel = train_pixel:view(3, -1, 1)
+    pixel, loss, train_loss = rgb:sample(rgb_features, temperature, train_pixel)
     --pixel = train_pixel
-    images[{{},{},pi}] = pixel
+    images[{{},{},pi}] = pixel:permute(2,1,3):contiguous()
     loss_sum_b = loss_sum_b + loss
     loss_sum_b_train = loss_sum_b_train + train_loss
   end
@@ -321,6 +328,7 @@ local function sample4n(features, gt)
   return images
 end
 
+local transform = checkpoint.opt.data_info
 --
 local loader = DataLoaderRaw{folder_path = opt.test_path, img_size = checkpoint.opt.image_size, shift = checkpoint.opt.input_shift, color = checkpoint.opt.color}
 local images = loader:getBatch{batch_size = batch_size, crop_size = checkpoint.opt.crop_size, gpu = opt.gpuid}
@@ -335,19 +343,39 @@ local loss_im = imcrit:forward(mean, var_log)
 
 local out = sample4n(features, images)
 local out_images = out[{{}, {}, 2, {},{}}]
-
 --local loss_pm = pmcrit:forward(out_images, images)
 --print(loss_pm, loss_im)
 
-out:add(-shift)
-images:add(-shift)
 for i = 1,batch_size do
-  --local pic = out[{i,{},1,{},{}}]
-  --pic = pic:clamp(0,1):mul(255):type('torch.ByteTensor')
-  --image.save("G/"..i.."_f.png", pic)
-  local pic = out_images[{i,{},{},{}}]
+  local pic = out_images[{i,{},{},{}}]:clone()
+  pic = pic:float()
+  if pm.pixel_size == 3 then
+    local h = pic:size(2)
+    local w = pic:size(3)
+    pic = pic:view(3, -1)
+    pic = torch.mm(transform.affine, pic)
+    pic = torch.add(pic, torch.repeatTensor(transform.mu, 1, h*w))
+    pic = pic:view(3, h, w)
+    pic = image.yuv2rgb(pic)
+  else
+    pic:add(-shift)
+  end
   pic = pic:clamp(0,1):mul(255):type('torch.ByteTensor')
   image.save("G/"..i.."_out.png", pic)
-  local pic = images[i]:clamp(0,1):mul(255):type('torch.ByteTensor')
+
+  local pic = images[{i,{},{},{}}]:clone()
+  pic = pic:float()
+  if pm.pixel_size == 3 then
+    local h = pic:size(2)
+    local w = pic:size(3)
+    pic = pic:view(3, -1)
+    pic = torch.mm(transform.affine, pic)
+    pic = torch.add(pic, torch.repeatTensor(transform.mu, 1, h*w))
+    pic = pic:view(3, h, w)
+    pic = image.yuv2rgb(pic)
+  else
+    pic:add(-shift)
+  end
+  pic = pic:clamp(0,1):mul(255):type('torch.ByteTensor')
   image.save("G/"..i.."_in.png", pic)
 end

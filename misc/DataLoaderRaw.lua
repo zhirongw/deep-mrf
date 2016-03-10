@@ -50,9 +50,69 @@ function DataLoaderRaw:__init(opt)
       local factor = math.max(opt.img_size/img:size(2), opt.img_size/img:size(3))
       img = image.scale(img, math.ceil(img:size(2)*factor-0.5), math.ceil(img:size(3)*factor-0.5))
     end
-    self.images[i] = img:add(opt.shift)
+    if self.nChannels == 3 then
+      img = image.rgb2yuv(img)
+      self.images[i] = img
+    else
+      self.images[i] = img:add(opt.shift)
+    end
+  end
+  if self.nChannels == 3 then
+    self:whitening()
   end
   self.iterator = 1
+end
+
+function DataLoaderRaw:whitening()
+  -- calculate the mean and covariance matrix of the whole dataset
+  local ps = self.nChannels
+  local imgs
+  for idx, img in pairs(self.images) do
+    if imgs == nil then
+      imgs = img:clone():view(ps, -1)
+    else
+      imgs = torch.cat(imgs, img:view(ps, -1))
+    end
+  end
+  self.mu = torch.mean(imgs, 2)
+  --print(self.mu)
+  imgs = torch.add(imgs, -1, torch.repeatTensor(self.mu, 1, imgs:size(2)))
+  local sigma = torch.mm(imgs, imgs:transpose(1, 2)):div(imgs:size(2))
+  --print(sigma)
+  local U, S, V = torch.svd(sigma)
+  --print(U, S, V)
+  local affine = S:add(1e-8):sqrt():cinv()*0.2
+  local affine_inv = torch.ones(ps):cdiv(affine)
+  affine = torch.diag(affine)
+  affine_inv = torch.diag(affine_inv)
+  --print(affine)
+  affine = torch.mm(U, torch.mm(affine, U:transpose(1,2)))
+  affine_inv = torch.mm(torch.mm(U, affine_inv), U:transpose(1,2))
+  --print(affine)
+  self.affine = affine
+  self.affine_inv = affine_inv
+  local I = torch.mm(affine, affine_inv)
+  print(I)
+
+  -- transform every image
+  for idx, img in pairs(self.images) do
+    local h = img:size(2)
+    local w = img:size(3)
+    img = torch.add(img:view(ps, -1), -1, torch.repeatTensor(self.mu, 1, h*w))
+    img = torch.mm(self.affine, img)
+    self.images[idx] = img:view(ps, h, w)
+    -- for debugging
+    local s = torch.mm(img, img:transpose(1,2)):div(h*w)
+    print('---------DataLoader-------------')
+    print(s)
+    print(torch.max(img[1]))
+    print(torch.min(img[1]))
+    print(torch.max(img[2]))
+    print(torch.min(img[2]))
+    print(torch.max(img[3]))
+    print(torch.min(img[3]))
+  end
+
 end
 
 function DataLoaderRaw:resetIterator()
@@ -61,6 +121,10 @@ end
 
 function DataLoaderRaw:getChannelSize()
   return self.nChannels
+end
+
+function DataLoaderRaw:getChannelScale()
+  return {mu = self.mu, affine = self.affine_inv}
 end
 
 --[[

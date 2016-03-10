@@ -5,6 +5,7 @@ require 'nngraph'
 require 'pm'
 require 'im'
 require 'kld'
+require 'rgb'
 local VAE = require 'vae'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
@@ -38,7 +39,10 @@ cmd:option('-feature_size',30,'size of pixel features from VAE')
 
 -- Pixel Model settings
 cmd:option('-rnn_size',200,'size of the rnn in number of hidden nodes in each layer')
+cmd:option('-rgb_rnn_size',200,'size of the rgb rnn')
 cmd:option('-num_layers',2,'number of layers in stacked RNN/LSTMs')
+cmd:option('-rgb_num_layers',1,'number of layers in rgb RNN/LSTMs')
+cmd:option('-rgb_encoding_size',100,'output of the pixel rnn encoding RGB infos')
 cmd:option('-patch_size',16,'size of the neighbor patch that a pixel is conditioned on')
 cmd:option('-num_mixtures',20,'number of mixtures used for encoding pixel output')
 cmd:option('-border_size',0,'size of the border to ignore, i.e. only the center label will be supervised')
@@ -111,7 +115,7 @@ if opt.phase == 1 then opt.patch_size = 1 end
 -------------------------------------------------------------------------------
 local loader = DataLoaderRaw{folder_path = opt.train_path, img_size = opt.image_size, shift = opt.input_shift, color = opt.color}
 local val_loader = DataLoaderRaw{folder_path = opt.val_path, img_size = opt.image_size, shift = opt.input_shift, color = opt.color}
-
+opt.data_info = loader:getChannelScale()
 -------------------------------------------------------------------------------
 -- Initialize the networks
 -------------------------------------------------------------------------------
@@ -134,7 +138,7 @@ if string.len(opt.start_from) > 0 then
   pmOpt.num_layers = opt.num_layers
   pmOpt.dropout = opt.drop_prob_pm
   pmOpt.batch_size = opt.batch_size
-  pmOpt.num_mixtures = opt.num_mixtures
+  pmOpt.encoding_size = opt.rgb_encoding_size
   pmOpt.recurrent_stride = opt.patch_size
   pmOpt.seq_length = opt.patch_size * opt.patch_size
   pmOpt.mult_in = opt.mult_in
@@ -161,13 +165,22 @@ if string.len(opt.start_from) > 0 then
   psOpt.noise = opt.noise
   protos.patch_extractor = nn.PatchExtractor(psOpt)
 
+  local rgbOpt = {}
+  rgbOpt.rnn_size = opt.rgb_rnn_size
+  rgbOpt.num_layers = opt.rgb_num_layers
+  rgbOpt.num_mixtures = opt.num_mixtures
+  rgbOpt.seq_length = 3
+  rgbOpt.mult_in = false
+  rgbOpt.encoding_size = opt.rgb_encoding_size
+  protos.rgb = nn.RGBModel(rgbOpt)
+
   protos.imcrit = nn.KLDCriterion()
   if opt.phase == 1 then
     protos.pmcrit = nn.MSECriterion()
   else
     --protos.pmcrit = nn.MSECriterion()
-    protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
-                {policy=opt.loss_policy, val=opt.loss_decay, runs=1})
+    protos.pmcrit = nn.PixelModelCriterion(1, opt.num_mixtures,
+                {policy=opt.loss_policy, val=opt.loss_decay})
   end
   iter = loaded_checkpoint.iter
 else
@@ -184,7 +197,7 @@ else
   pmOpt.num_layers = opt.num_layers
   pmOpt.dropout = opt.drop_prob_pm
   pmOpt.batch_size = opt.batch_size
-  pmOpt.num_mixtures = opt.num_mixtures
+  pmOpt.encoding_size = opt.rgb_encoding_size
   pmOpt.recurrent_stride = opt.patch_size
   pmOpt.seq_length = opt.patch_size * opt.patch_size
   pmOpt.mult_in = opt.mult_in
@@ -216,9 +229,17 @@ else
     protos.pmcrit = nn.MSECriterion()
   else
     --protos.pmcrit = nn.MSECriterion()
-    protos.pmcrit = nn.PixelModelCriterion(protos.pm.pixel_size, opt.num_mixtures,
-                  {policy=opt.loss_policy, val=opt.loss_decay, runs=1})
+    protos.pmcrit = nn.PixelModelCriterion(1, opt.num_mixtures,
+                  {policy=opt.loss_policy, val=opt.loss_decay})
   end
+  local rgbOpt = {}
+  rgbOpt.rnn_size = opt.rgb_rnn_size
+  rgbOpt.num_layers = opt.rgb_num_layers
+  rgbOpt.num_mixtures = opt.num_mixtures
+  rgbOpt.seq_length = 3
+  rgbOpt.mult_in = false
+  rgbOpt.encoding_size = opt.rgb_encoding_size
+  protos.rgb = nn.RGBModel(rgbOpt)
 end
 
 -- ship everything to GPU, maybe
@@ -228,6 +249,12 @@ end
 
 print('Training a 2D LSTM with number of layers: ', opt.num_layers)
 print('Hidden nodes in each layer: ', opt.rnn_size)
+print('Pixel encoding size: ', opt.rgb_encoding_size)
+print('RGB rnn number of layers: ', opt.rgb_num_layers)
+print('RGB rnn size: ', opt.rgb_rnn_size)
+print('VAE latent size: ', opt.latent_size)
+print('context feature size: ', opt.feature_size)
+print('number of mixtures: ', opt.num_mixtures)
 print('The input image local patch size: ', opt.patch_size)
 print('Ignoring the border of size: ', opt.border_size)
 print('Input channel dimension: ', loader:getChannelSize())
@@ -235,13 +262,18 @@ print('Input pixel shift: ', opt.input_shift)
 print('Input border init: ', opt.border_init)
 print('Training im batch size: ', opt.im_batch_size)
 print('Training pm batch size: ', opt.pm_batch_size)
+print('Save checkpoint to: ', opt.checkpoint_path)
+
 -- flatten and prepare all model parameters to a single vector.
 local params, grad_params = protos.pm:getParameters()
 local vae_params, vae_grad_params = protos.im:getParameters()
+local params_rgb, grad_params_rgb = protos.rgb:getParameters()
 print('total number of parameters in PM: ', params:nElement())
 print('total number of parameters in VAE: ', vae_params:nElement())
+print('total number of parameters in COLOR: ', params_rgb:nElement())
 assert(params:nElement() == grad_params:nElement())
 assert(vae_params:nElement() == vae_grad_params:nElement())
+assert(params_rgb:nElement() == grad_params_rgb:nElement())
 
 -- construct thin module clones that share parameters with the actual
 -- modules. These thin module will have no intermediates and will be used
@@ -249,18 +281,24 @@ assert(vae_params:nElement() == vae_grad_params:nElement())
 local thin_pm = protos.pm:clone()
 thin_pm.core:share(protos.pm.core, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
 local thin_im = protos.im:clone()
+local thin_rgb = protos.rgb:clone()
 thin_im.encoder:share(protos.im.encoder, 'weight', 'bias', 'running_mean', 'running_var') -- TODO: we are assuming that IM has specific members! figure out clean way to get rid of, not modular.
 thin_im.decoder:share(protos.im.decoder, 'weight', 'bias', 'running_mean', 'running_var') -- TODO: we are assuming that IM has specific members! figure out clean way to get rid of, not modular.
+thin_rgb.core:share(protos.rgb.core, 'weight', 'bias') -- TODO: we are assuming that PM has specific members! figure out clean way to get rid of, not modular.
+thin_rgb.lookup_matrix:share(protos.rgb.lookup_matrix, 'weight', 'bias')
 -- sanitize all modules of gradient storage so that we dont save big checkpoints
 local pm_modules = thin_pm:getModulesList()
 for k,v in pairs(pm_modules) do net_utils.sanitize_gradients(v) end
 local im_modules = thin_im:getModulesList()
 for k,v in pairs(im_modules) do net_utils.sanitize_gradients(v) end
+local rgb_modules = thin_rgb:getModulesList()
+for k,v in pairs(rgb_modules) do net_utils.sanitize_gradients(v) end
 
 -- create clones and ensure parameter sharing. we have to do this
 -- all the way here at the end because calls such as :cuda() and
 -- :getParameters() reshuffle memory around.
 protos.pm:createClones()
+protos.rgb:createClones()
 
 collectgarbage() -- "yeah, sure why not"
 
@@ -271,6 +309,7 @@ batch_size = opt.im_batch_size * opt.pm_batch_size
 local function eval_split(n)
   protos.im:evaluate()
   protos.pm:evaluate()
+  protos.rgb:evaluate()
   --loader:resetIterator(split) -- rewind iteator back to first datapoint in the split
   local loss1_sum = 0
   local loss2_sum = 0
@@ -286,13 +325,16 @@ local function eval_split(n)
     -- 2. extract patches
     local targets, patches = unpack(protos.patch_extractor:forward({images, features}))
     -- 3. forward the pixel model
-    local pred = protos.pm:forward(patches)
+    local rgb_features = protos.pm:forward(patches)
+    -- 4. rgb module
+    rgb_features = rgb_features:view(-1, opt.rgb_encoding_size)
+    local gmms = protos.rgb:forward({rgb_features, targets})
     --print(gmms)
     --pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
     --local lpred = pred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}]
 
     local loss1 = protos.imcrit:forward(mean, log_var)
-    local loss2 = protos.pmcrit:forward(pred, targets)
+    local loss2 = protos.pmcrit:forward(gmms, targets)
     loss1_sum = loss1_sum + loss1
     loss2_sum = loss2_sum + loss2
 
@@ -349,11 +391,12 @@ end
 local function lossFun()
   protos.im:training()
   protos.pm:training()
+  protos.rgb:training()
   vae_grad_params:zero()
   grad_params:zero()
-  print(params[1])
+  grad_params_rgb:zero()
   print(torch.mean(torch.abs(params)))
-  print(vae_params[1])
+  print(torch.mean(torch.abs(vae_params)))
   -----------------------------------------------------------------------------
   -- Forward pass
   -----------------------------------------------------------------------------
@@ -366,7 +409,10 @@ local function lossFun()
   -- 2. extract patches
   local targets, patches = unpack(protos.patch_extractor:forward({images, features}))
   -- 3. forward the pixel model
-  local pred = protos.pm:forward(patches)
+  local rgb_features = protos.pm:forward(patches)
+  -- 4. forward the rgb module
+  rgb_features = rgb_features:view(-1, opt.rgb_encoding_size)
+  local gmms = protos.rgb:forward({rgb_features, targets})
   --print('Forward time: ' .. timer:time().real .. ' seconds')
   -- forward the pixel model criterion
   --pred = pred:view(opt.patch_size, opt.patch_size, batch_size, -1)
@@ -375,9 +421,9 @@ local function lossFun()
   -- Loss
   -----------------------------------------------------------------------------
   local loss1 = protos.imcrit:forward(mean, log_var)
-  local loss2 = protos.pmcrit:forward(pred, targets)
+  local loss2 = protos.pmcrit:forward(gmms, targets)
   local dmean, dlog_var = unpack(protos.imcrit:backward(mean, log_var))
-  local dpred = protos.pmcrit:backward(pred, targets)
+  local dgmms = protos.pmcrit:backward(gmms, targets)
   --print('Criterion time: ' .. timer:time().real .. ' seconds')
 
   -----------------------------------------------------------------------------
@@ -387,8 +433,11 @@ local function lossFun()
   --local dpred = torch.Tensor(pred:size()):type(pred:type()):fill(0)
   --dpred[{{opt.border_size+1,opt.patch_size-opt.border_size},{opt.border_size+1,opt.patch_size-opt.border_size},{},{}}] = dlpred
   --dpred = dpred:view(-1, batch_size, protos.pm.pixel_size)
+  -- 4. backprop rgb modules
+  local drgb_features = protos.rgb:backward({rgb_features, targets}, dgmms)
+  drgb_features = drgb_features[1]:view(protos.pm.seq_length, batch_size, opt.rgb_encoding_size)
   -- 3. backprop pixel model
-  local dpatches = protos.pm:backward(patches, dpred)
+  local dpatches = protos.pm:backward(patches, drgb_features)
   -- 2. backprop patch extractor
   local x, dfeatures = unpack(protos.patch_extractor:backward({images, features},{x, dpatches}))
   -- 1. backprop image model
@@ -400,6 +449,7 @@ local function lossFun()
   end
   -- clip gradients
   -- print(string.format('claming %f%% of gradients', 100*torch.mean(torch.gt(torch.abs(grad_params), opt.grad_clip))))
+  grad_params_rgb:clamp(-opt.grad_clip, opt.grad_clip)
   grad_params:clamp(-opt.grad_clip, opt.grad_clip)
   -- apply L2 regularization
   if opt.vae_weight_decay > 0 then
@@ -471,6 +521,7 @@ end
 local loss0
 local optim_state = {}
 local vae_optim_state = {}
+local rgb_optim_state = {}
 local loss_history = {}
 local val_loss_history = {}
 local best_score
@@ -515,6 +566,7 @@ while true do
     local save_protos = {}
     save_protos.pm = thin_pm -- these are shared clones, and point to correct param storage
     save_protos.im = thin_im -- these are shared clones, and point to correct param storage
+    save_protos.rgb = thin_rgb
     checkpoint.protos = save_protos
     torch.save(checkpoint_path .. '.t7', checkpoint)
     print('wrote training checkpoint to ' .. checkpoint_path .. '.t7')
@@ -527,16 +579,22 @@ while true do
     -- perform a parameter update
     if opt.optim == 'rmsprop' then
       rmsprop(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_epsilon, optim_state)
+      rmsprop(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, opt.optim_epsilon, rgb_optim_state)
     elseif opt.optim == 'adagrad' then
       adagrad(params, grad_params, learning_rate, opt.optim_epsilon, optim_state)
+      adagrad(params_rgb, grad_params_rgb, learning_rate, opt.optim_epsilon, rgb_optim_state)
     elseif opt.optim == 'sgd' then
       sgd(params, grad_params, opt.learning_rate)
+      sgd(params_rgb, grad_params_rgb, learning_rate)
     elseif opt.optim == 'sgdm' then
       sgdm(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
+      sgdm(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, rgb_optim_state)
     elseif opt.optim == 'sgdmom' then
       sgdmom(params, grad_params, learning_rate, opt.optim_alpha, optim_state)
+      sgdmom(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, rgb_optim_state)
     elseif opt.optim == 'adam' then
       adam(params, grad_params, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, optim_state)
+      adam(params_rgb, grad_params_rgb, learning_rate, opt.optim_alpha, opt.optim_beta, opt.optim_epsilon, rgb_optim_state)
     else
       error('bad option opt.optim')
     end

@@ -83,7 +83,8 @@ function PatchExtractor:updateOutput(input)
   local targets = pixel_patches[{{},{},{2,ps+1},{2,ps+1}}]
   targets = targets[{{},{},{bs+1,ps-bs},{bs+1, ps-bs}}]:clone()
   targets = targets:view(batch_size, nChannels, -1)
-  targets = targets:permute(3, 1, 2):contiguous()
+  targets = targets:permute(2, 3, 1):contiguous()
+  targets = targets:view(nChannels, -1, 1)
 
   -- prepare the inputs. -n1, left, n2, up, n3, right, n4 down.
   local n1, n2, n3, n4, pixel_inputs, feature_inputs
