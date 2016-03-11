@@ -22,7 +22,7 @@ cmd:text('Generating textures & images pixels by pixels')
 cmd:text()
 cmd:text('Options')
 
-cmd:option('-phase', 1,'phase 1: learning features, phase 2: learning pixels')
+cmd:option('-phase', 2,'phase 1: learning features, phase 2: learning pixels')
 -- Data input settings
 cmd:option('-train_path','G/images/5','path to the training data')
 cmd:option('-val_path','G/images/5','path to the val data')
@@ -32,9 +32,9 @@ cmd:option('-color', 1, 'whether the input image is color image or grayscale ima
 cmd:option('-start_from', '', 'path to a model checkpoint to initialize model weights from. Empty = don\'t')
 
 -- Image Model settings
-cmd:option('-image_size',72,'resize the image to')
+cmd:option('-image_size',64,'resize the image to')
 cmd:option('-crop_size',64,'the actually size feeds into the network')
-cmd:option('-latent_size',500,'size of top latent representations of VAE')
+cmd:option('-latent_size',100,'size of top latent representations of VAE')
 cmd:option('-feature_size',30,'size of pixel features from VAE')
 
 -- Pixel Model settings
@@ -54,7 +54,7 @@ cmd:option('-noise', 0, 'Input perturbation noise.')
 -- Optimization: General
 cmd:option('-max_iters', -1, 'max number of iterations to run for (-1 = run forever)')
 cmd:option('-im_batch_size', 4,'number of images per batch')
-cmd:option('-pm_batch_size', 8,'number of patches per image per batch')
+cmd:option('-pm_batch_size', 16,'number of patches per image per batch')
 cmd:option('-grad_clip',0.1,'clip gradients at this value (note should be lower than usual 5 because we normalize grads by both batch and seq_length)')
 cmd:option('-drop_prob_pm', 0, 'strength of dropout in the Pixel Model')
 cmd:option('-mult_in', true, 'An extension of the LSTM architecture')
@@ -81,7 +81,7 @@ cmd:option('-vae_weight_decay', 0, 'L2 weight decay just for the VAE')
 cmd:option('-finetune_vae_after', 0, 'After what iteration do we start finetuning the CNN? (-1 = disable; never finetune, 0 = finetune from start)')
 
 -- Evaluation/Checkpointing
-cmd:option('-save_checkpoint_every', 1000, 'how often to save a model checkpoint?')
+cmd:option('-save_checkpoint_every', 2000, 'how often to save a model checkpoint?')
 cmd:option('-checkpoint_path', '/home/zhirongw/pixel/VAE/models', 'folder to save checkpoints into (empty = this folder)')
 cmd:option('-losses_log_every', 25, 'How often do we snapshot losses, for inclusion in the progress dump? (0 = disable)')
 

@@ -148,6 +148,8 @@ function DataLoaderRaw:getBatch(opt)
 
     local h = torch.random(1, im:size(2)-crop_size+1)
     local w = torch.random(1, im:size(3)-crop_size+1)
+    --h = (im:size(2)-crop_size)/2+1
+    --w = (im:size(3)-crop_size)/2+1
     -- put the patch in the center.
     images[i] = im[{{}, {h, h+crop_size-1}, {w, w+crop_size-1}}]
     -- and record associated info as well

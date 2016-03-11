@@ -328,10 +328,11 @@ local function sample4n(features, gt)
   return images
 end
 
-local transform = checkpoint.opt.data_info
+-- local transform = checkpoint.opt.data_info
 --
 local loader = DataLoaderRaw{folder_path = opt.test_path, img_size = checkpoint.opt.image_size, shift = checkpoint.opt.input_shift, color = checkpoint.opt.color}
 local images = loader:getBatch{batch_size = batch_size, crop_size = checkpoint.opt.crop_size, gpu = opt.gpuid}
+local transform = loader:getChannelScale()
 
 local features, dummy, mean, var_log = unpack(im:forward(images))
 local loss_im = imcrit:forward(mean, var_log)
