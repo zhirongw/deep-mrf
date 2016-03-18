@@ -99,7 +99,7 @@ end
 
 -------------------------------------------------------------------------------
 
-local function sample3n(features, gt)
+local function sample3n(features, gt, mask)
   local states = {[0]=init_state}
   local height = features:size(3)
   local width = features:size(4)
@@ -174,7 +174,7 @@ local function sample3n(features, gt)
 end
 
 -- we need to cache the states of all the pixels, and go though the image twice.
-local function sample4n(features, gt)
+local function sample4n(features, gt, mask)
   local states = {[0]=init_state}
   local batch_size = features:size(1)
   local h = features:size(3)
@@ -187,11 +187,14 @@ local function sample4n(features, gt)
   features = features:permute(3, 1, 2)
   features = torch.repeatTensor(features, 2, 1, 1)
 
-  images = torch.Tensor(batch_size, pm.pixel_size, h*w):cuda()
-  images = torch.repeatTensor(images, 1, 1, 2)
+  gen_images = torch.Tensor(batch_size, pm.pixel_size, h*w):cuda()
+  gen_images = torch.repeatTensor(gen_images, 1, 1, 2)
   gt = gt:view(batch_size, pm.pixel_size, h*w)
   gt = torch.repeatTensor(gt, 1, 1, 2)
   gt = gt:cuda()
+  mask = mask:view(batch_size, pm.pixel_size, h*w)
+  mask = torch.repeatTensor(mask, 1, 1, 2)
+  mask = mask:cuda()
 
   -------------------------------The Forward Pass -----------------------------
   local loss_sum_f = 0
@@ -249,10 +252,10 @@ local function sample4n(features, gt)
     if pl == 0 then
       pixel_left = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     elseif pl > pm.seq_length then
-      pixel_left = images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
+      pixel_left = gen_images[{{}, {}, pm._Bindex[{pl-pm.seq_length, 5}]}]
     else
       if pm.output_back then
-        pixel_left = images[{{}, {}, pm._Findex[{pl, 5}]}]
+        pixel_left = gen_images[{{}, {}, pm._Findex[{pl, 5}]}]
       else
         pixel_left = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
       end
@@ -260,10 +263,10 @@ local function sample4n(features, gt)
     if pu == 0 then
       pixel_up = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     elseif pu > pm.seq_length then
-      pixel_up = images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
+      pixel_up = gen_images[{{}, {}, pm._Bindex[{pu-pm.seq_length, 5}]}]
     else
       if pm.output_back then
-        pixel_up = images[{{}, {}, pm._Findex[{pu, 5}]}]
+        pixel_up = gen_images[{{}, {}, pm._Findex[{pu, 5}]}]
       else
         pixel_up = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
       end
@@ -271,10 +274,10 @@ local function sample4n(features, gt)
     if pr == 0 then
       pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     elseif pr > pm.seq_length then
-      pixel_right = images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
+      pixel_right = gen_images[{{}, {}, pm._Bindex[{pr-pm.seq_length, 5}]}]
     else
       if pm.output_back then
-        pixel_right = images[{{}, {}, pm._Findex[{pr, 5}]}]
+        pixel_right = gen_images[{{}, {}, pm._Findex[{pr, 5}]}]
       else
         pixel_right = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
       end
@@ -282,10 +285,10 @@ local function sample4n(features, gt)
     if pd == 0 then
       pixel_down = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
     elseif pd > pm.seq_length then
-      pixel_down = images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
+      pixel_down = gen_images[{{}, {}, pm._Bindex[{pd-pm.seq_length, 5}]}]
     else
       if pm.output_back then
-        pixel_down = images[{{}, {}, pm._Findex[{pd, 5}]}]
+        pixel_down = gen_images[{{}, {}, pm._Findex[{pd, 5}]}]
       else
         pixel_down = torch.Tensor(batch_size, pm.pixel_size):fill(border):cuda()
       end
@@ -310,8 +313,10 @@ local function sample4n(features, gt)
     local train_pixel = gt[{{}, {}, pi}]:clone()
     train_pixel = train_pixel:view(3, -1, 1)
     pixel, loss, train_loss = rgb:sample(rgb_features, temperature, train_pixel)
-    --pixel = train_pixel
-    images[{{},{},pi}] = pixel:permute(2,1,3):contiguous()
+    if mask[{1,1,pi}] == 1 then
+      pixel = train_pixel:clone():permute(2,1,3):contiguous()
+    end
+    gen_images[{{},{},pi}] = pixel:permute(2,1,3):contiguous()
     loss_sum_b = loss_sum_b + loss
     loss_sum_b_train = loss_sum_b_train + train_loss
   end
@@ -324,8 +329,8 @@ local function sample4n(features, gt)
   --print('overall loss: ', (loss_sum_f + loss_sum_b) / 2)
   -- output the sampled images
   --local images_cpu = images:float():view(batch_size, pm.pixel_size, 2, h, w)
-  local images = images:view(batch_size, pm.pixel_size, 2, h, w)
-  return images
+  local gen_images = gen_images:view(batch_size, pm.pixel_size, 2, h, w)
+  return gen_images
 end
 
 local transform = checkpoint.opt.data_info
@@ -333,16 +338,18 @@ local transform = checkpoint.opt.data_info
 local loader = DataLoaderRaw{folder_path = opt.test_path, img_size = checkpoint.opt.image_size, shift = checkpoint.opt.input_shift, color = checkpoint.opt.color}
 local images = loader:getBatch{batch_size = batch_size, crop_size = checkpoint.opt.crop_size, gpu = opt.gpuid}
 --local transform = loader:getChannelScale()
-
---local features, dummy, mean, var_log = unpack(im:forward(images))
---local loss_im = imcrit:forward(mean, var_log)
+local mask = images:clone():fill(1)
+mask[{{},{},{17,48},{17,48}}] = 0
+images[{{},{},{17,48},{17,48}}] = 0
+local features, dummy, mean, var_log = unpack(im:forward(images))
+local loss_im = imcrit:forward(mean, var_log)
 --]]
 -------------------------------------------------------------------------------
 --
-local noise = torch.randn(batch_size, checkpoint.opt.latent_size):cuda()
-local features, dummy = unpack(im.decoder:forward(noise))
+--local noise = torch.randn(batch_size, checkpoint.opt.latent_size):cuda()
+--local features, dummy = unpack(im.decoder:forward(noise))
 
-local out = sample4n(features, images)
+local out = sample4n(features, images, mask)
 local out_images = out[{{}, {}, 2, {},{}}]
 --local loss_pm = pmcrit:forward(out_images, images)
 --print(loss_pm, loss_im)
@@ -378,5 +385,6 @@ for i = 1,batch_size do
     pic:add(-shift)
   end
   pic = pic:clamp(0,1):mul(255):type('torch.ByteTensor')
-  --image.save("G/"..i.."_in.png", pic)
+  pic[{{},{17,48},{17,48}}] = 0
+  image.save("G/"..i.."_in.png", pic)
 end
