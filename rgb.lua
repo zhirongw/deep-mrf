@@ -88,15 +88,19 @@ function layer:parameters()
 end
 
 function layer:training()
-  if self.clones == nil then self:createClones() end -- create these lazily if needed
+  --if self.clones == nil then self:createClones() end -- create these lazily if needed
+  if self.clones ~= nil then
   for k,v in pairs(self.clones) do v:training() end
   for k,v in pairs(self.lookup_matrices) do v:training() end
+  end
 end
 
 function layer:evaluate()
-  if self.clones == nil then self:createClones() end -- create these lazily if needed
+  --if self.clones == nil then self:createClones() end -- create these lazily if needed
+  if self.clones ~= nil then
   for k,v in pairs(self.clones) do v:evaluate() end
   for k,v in pairs(self.lookup_matrices) do v:evaluate() end
+  end
 end
 
 function layer:sample(features, temperature, gt)
@@ -118,7 +122,7 @@ function layer:sample(features, temperature, gt)
       xt = self.lookup_matrices[t-1]:forward(pixels[t-1])
     end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
-    self._inputs[t] = {xt,unpack(self._states[t-1])}
+    self._inputs[t] = {xt,table.unpack(self._states[t-1])}
     -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
     local lsts = self.clones[t]:forward(self._inputs[t])
     -- save the state
@@ -166,7 +170,7 @@ function layer:updateOutput(input)
       xt = self.lookup_matrices[t-1]:forward(pixels[t-1])
     end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
-    self._inputs[t] = {xt,unpack(self._states[t-1])}
+    self._inputs[t] = {xt,table.unpack(self._states[t-1])}
     -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
     local lsts = self.clones[t]:forward(self._inputs[t])
     -- save the state
@@ -219,6 +223,6 @@ function layer:updateGradInput(input, gradOutput)
   end
 
   -- don't prop to gt pixels
-  self.gradInput = {dfeatures, torch.Tensor()}
+  self.gradInput = {dfeatures, nil}
   return self.gradInput
 end

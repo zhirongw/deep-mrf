@@ -19,10 +19,10 @@ end
 function KLDCriterion:updateGradInput(mean, log_var)
 	self.gradInput = {}
 
-    self.gradInput[1] = mean:clone():mul(0.00001)
+    self.gradInput[1] = mean:clone():mul(1)
 
     -- Fix this to be nicer
-    self.gradInput[2] = torch.exp(log_var):mul(-1):add(1):mul(-0.5*0.00001)
+    self.gradInput[2] = torch.exp(log_var):mul(-1):add(1):mul(-0.5*1)
 
     return self.gradInput
 end

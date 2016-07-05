@@ -125,7 +125,7 @@ function crit:updateOutput(input, target)
   -- do the loss the gradients
   local loss = - torch.sum(torch.cmul(torch.log(pdf), (self.LW[{{},{},1}]))) -- loss of pixels, Mixture of Gaussians
   local loss_rgb = - torch.squeeze(torch.mean(torch.log(pdf),2))
-  print(loss_rgb[1], loss_rgb[2], loss_rgb[3])
+  --print(loss_rgb[1], loss_rgb[2], loss_rgb[3])
 
   g_rpb = g_rpb:cmul(self.LW)
   local grad_g_w = - torch.cdiv(g_rpb, torch.repeatTensor(pdf,1,1,nm))

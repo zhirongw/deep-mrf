@@ -43,15 +43,11 @@ function PatchExtractor:__init(opt)
   parent.__init(self)
   self.patch_size = opt.patch_size
   self.feature_dim = opt.feature_dim
-  self.im_batch_size = opt.im_batch_size
   self.pm_batch_size = opt.pm_batch_size
-  self.batch_size = self.im_batch_size * self.pm_batch_size
   self.num_neighbors = opt.num_neighbors
   self.border_size = opt.border_size
   self.border = opt.border
   self.noise = opt.noise
-  self.h_index = torch.Tensor(self.batch_size)
-  self.w_index = torch.Tensor(self.batch_size)
   self.gradInput = {}
 end
 
@@ -61,7 +57,11 @@ function PatchExtractor:updateOutput(input)
   local height = images:size(3)
   local width = images:size(4)
   local nChannels = images:size(2)
+  self.im_batch_size = images:size(1)
+  self.batch_size = self.pm_batch_size * self.im_batch_size
   local batch_size = self.batch_size
+  self.h_index = torch.Tensor(self.batch_size)
+  self.w_index = torch.Tensor(self.batch_size)
   local ps = self.patch_size
   local bs = self.border_size
   -- two potential schemes, initialize with a border of one pixel in both directions.
@@ -138,7 +138,7 @@ function PatchExtractor:updateGradInput(input, gradOutput)
     end
   end
   -- no need to backward to pixels
-  self.gradInput[1] = self.gradInput[1] or input[1].new()
+  self.gradInput[1] = nil
 
   return self.gradInput
 end
@@ -192,24 +192,24 @@ end
 
 function layer:updateOutput(input)
 
-  self.mean, self.var_log = unpack(self.encoder:forward(input))
+  self.mean, self.var_log = table.unpack(self.encoder:forward(input))
 
   self.z = self.sampler:forward({self.mean, self.var_log})
 
-  local features, pred = unpack(self.decoder:forward(self.z))
+  local features = self.decoder:forward(self.z)
 
-  self.output = {features, pred, self.mean, self.var_log}
+  self.output = {features, self.mean, self.var_log}
 
   return self.output
 end
 
 function layer:updateGradInput(input, gradOutput)
 
-  local dz = self.decoder:backward(self.z, {gradOutput[1], gradOutput[2]})
+  local dz = self.decoder:backward(self.z, gradOutput[1])
 
-  local dmean, dvar_log = unpack(self.sampler:backward({self.mean, self.var_log}, dz))
-  dmean:add(gradOutput[3])
-  dvar_log:add(gradOutput[4])
+  local dmean, dvar_log = table.unpack(self.sampler:backward({self.mean, self.var_log}, dz))
+  dmean:add(gradOutput[2])
+  dvar_log:add(gradOutput[3])
 
   self.gradInput = self.encoder:backward(input, {dmean, dvar_log})
 

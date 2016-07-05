@@ -92,7 +92,7 @@ function DataLoaderRaw:whitening()
   self.affine = affine
   self.affine_inv = affine_inv
   local I = torch.mm(affine, affine_inv)
-  print(I)
+  --print(I)
 
   -- transform every image
   for idx, img in pairs(self.images) do
@@ -103,14 +103,14 @@ function DataLoaderRaw:whitening()
     self.images[idx] = img:view(ps, h, w)
     -- for debugging
     local s = torch.mm(img, img:transpose(1,2)):div(h*w)
-    print('---------DataLoader-------------')
-    print(s)
-    print(torch.max(img[1]))
-    print(torch.min(img[1]))
-    print(torch.max(img[2]))
-    print(torch.min(img[2]))
-    print(torch.max(img[3]))
-    print(torch.min(img[3]))
+    --print('---------DataLoader-------------')
+    --print(s)
+    --print(torch.max(img[1]))
+    --print(torch.min(img[1]))
+    --print(torch.max(img[2]))
+    --print(torch.min(img[2]))
+    --print(torch.max(img[3]))
+    --print(torch.min(img[3]))
   end
 
 end

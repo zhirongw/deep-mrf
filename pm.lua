@@ -124,7 +124,7 @@ function layer:updateOutput(input)
     local t_h = t - self.recurrent_stride
     if h == 1 then t_h = 0 end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t] }
-    self._inputs[t] = {input[t],unpack(self._states[t_w])}
+    self._inputs[t] = {input[t],table.unpack(self._states[t_w])}
     for i,v in ipairs(self._states[t_h]) do table.insert(self._inputs[t], v) end
     -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
     local lsts = self.clones[t]:forward(self._inputs[t])
@@ -327,7 +327,7 @@ function layer:updateOutput(input)
     if pl == 0 then input[{pi, {}, {1, self.pixel_size}}] = self.border_init end
     if pr == 0 then input[{pi, {}, {2*self.pixel_size+1, 3*self.pixel_size}}] = self.border_init end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
-    self._inputs[t] = {input[pi],unpack(self._states[pl])}
+    self._inputs[t] = {input[pi],table.unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t], v) end
     for i,v in ipairs(self._states[pr]) do table.insert(self._inputs[t], v) end
     -- forward the network outputs, {next_c, next_h, next_c, next_h ..., output_vec}
@@ -506,7 +506,7 @@ end
 
 function layer:createClones()
   -- construct the net clones
-  print('constructing clones inside the PixelModel')
+  print('constructing clones inside the 4DPixelModel')
   self.clones = {self.core}
   for t=2,2*self.seq_length do
     self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
@@ -535,13 +535,17 @@ function layer:parameters()
 end
 
 function layer:training()
-  if self.clones == nil then self:createClones() end -- create these lazily if needed
+  --if self.clones == nil then self:createClones() end -- create these lazily if needed
+  if self.clones ~= nil then
   for k,v in pairs(self.clones) do v:training() end
+  end
 end
 
 function layer:evaluate()
-  if self.clones == nil then self:createClones() end -- create these lazily if needed
+  --if self.clones == nil then self:createClones() end -- create these lazily if needed
+  if self.clones ~= nil then
   for k,v in pairs(self.clones) do v:evaluate() end
+  end
 end
 
 function layer:_buildIndex()
@@ -624,7 +628,7 @@ function layer:updateOutput(input)
     local pi = self._Findex[{t, 5}]
     -- prepare the input border. First round will never be available.
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
-    self._inputs[t] = {input[pi],unpack(self._states[pl])}
+    self._inputs[t] = {input[pi],table.unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t], v) end
     for i,v in ipairs(self._states[pr]) do table.insert(self._inputs[t], v) end
     for i,v in ipairs(self._states[pd]) do table.insert(self._inputs[t], v) end
@@ -661,7 +665,7 @@ function layer:updateOutput(input)
       if pd <= sl and pd > 0 then input[{pi, {}, {3*self.pixel_size+1, 4*self.pixel_size}}] = self._inter[self._Findex[{pd,5}]] end
     end
     -- inputs to LSTM, {input, states[t, t-1], states[t-1, t], states[t, t+1]}
-    self._inputs[t+sl] = {input[pi],unpack(self._states[pl])}
+    self._inputs[t+sl] = {input[pi],table.unpack(self._states[pl])}
     for i,v in ipairs(self._states[pu]) do table.insert(self._inputs[t+sl], v) end
     for i,v in ipairs(self._states[pr]) do table.insert(self._inputs[t+sl], v) end
     for i,v in ipairs(self._states[pd]) do table.insert(self._inputs[t+sl], v) end
