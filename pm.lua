@@ -1,5 +1,6 @@
 require 'nn'
 require 'gmms'
+require 'dpnn'
 local utils = require 'misc.utils'
 local net_utils = require 'misc.net_utils'
 local LSTM = require 'lstm'
@@ -59,8 +60,9 @@ function layer:createClones()
   print('constructing clones inside the PixelModel')
   self.clones = {self.core}
   for t=2,self.seq_length do
-    self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
+    self.clones[t] = self.core:sharedClone(true, true)
   end
+  collectgarbage()
 end
 
 function layer:getModulesList()
@@ -502,6 +504,9 @@ function layer:_createInitState(batch_size)
     end
   end
   self.num_state = #self.init_state
+  self.output:resize(self.seq_length, batch_size, self.output_size)
+  self._inter = torch.Tensor():type(self.output:type()):resizeAs(self.output)
+  self._dinter = torch.zeros(self._inter:size()):type(self._inter:type())
 end
 
 function layer:createClones()
@@ -509,8 +514,9 @@ function layer:createClones()
   print('constructing clones inside the 4DPixelModel')
   self.clones = {self.core}
   for t=2,2*self.seq_length do
-    self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
+    self.clones[t] = self.core:sharedClone(true, true)
   end
+  collectgarbage()
 end
 
 function layer:getModulesList()
@@ -609,13 +615,12 @@ function layer:updateOutput(input)
   assert(input:size(1) == sl)
   local batch_size = input:size(2)
   -- output is a table, indexed by the seq index.
-  self.output = torch.Tensor(sl, batch_size, self.output_size):type(input:type())
   input = torch.repeatTensor(input, 2, 1, 1)
 
   self:_createInitState(batch_size)
+  self._inter:zero()
 
   self._states = {[0] = self.init_state}
-  self._inter = torch.zeros(self.output:size()):type(self.output:type())
   self._inputs = {}
   -- forward loop through the image pixels
   -- the seq info will never be available for the first sweep.
@@ -695,11 +700,11 @@ function layer:updateGradInput(input, gradOutput)
   local batch_size = gradOutput:size(1)
   self.gradInput:resizeAs(input)
   local dgradInput = torch.repeatTensor(self.gradInput, 2, 1, 1)
+  self._dinter:zero()
 
   -- initialize the gradient of states all to zeros.
   -- this works when init_state is all zeros
   local _dstates = {}
-  self._dinter = torch.zeros(self._inter:size()):type(self._inter:type())
   -- the backward table
   for t=1,sl do
     local pl = self._Bindex[{t, 1}]

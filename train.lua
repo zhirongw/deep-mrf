@@ -104,6 +104,13 @@ torch.setdefaulttensortype('torch.FloatTensor') -- for CPU
 if opt.gpuid >= 0 then
   require 'cutorch'
   require 'cunn'
+  local DPT = nn.DataParallelTable
+  function DPT:collectgarbage()
+    self.impl:exec(function(m, i)
+        collectgarbage()
+    end)
+  end
+
   if opt.backend == 'cudnn' then require 'cudnn' end
   if opt.ngpu == 1 then
     cutorch.manualSeed(opt.seed)
@@ -450,7 +457,7 @@ while true do
   end
 
   -- stopping criterions
-  if iter % 5 == 0 then collectgarbage() end -- good idea to do this once in a while, i think
+  if iter % 10 == 0 then collectgarbage() if opt.ngpu>1 then protos.model:collectgarbage() end end -- good idea to do this once in a while, i think
   if loss0 == nil then loss0 = losses.kld_loss + losses.pixel_loss end
   if losses.kld_loss+losses.pixel_loss > loss0 * 2000 then
     print('loss seems to be exploding, quitting.')

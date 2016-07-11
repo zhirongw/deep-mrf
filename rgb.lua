@@ -48,6 +48,7 @@ function layer:_createInitState(batch_size)
     end
   end
   self.num_state = #self.init_state
+  self.output:resize(self.seq_length, batch_size, self.output_size)
 end
 
 function layer:createClones()
@@ -56,11 +57,12 @@ function layer:createClones()
   self.clones = {self.core}
   self.lookup_matrices = {self.lookup_matrix}
   for t=2,self.seq_length do
-    self.clones[t] = self.core:clone('weight', 'bias', 'gradWeight', 'gradBias')
+    self.clones[t] = self.core:sharedClone(true, true)
   end
   for t=2,self.seq_length-1 do
-    self.lookup_matrices[t] = self.lookup_matrix:clone('weight', 'bias', 'gradWeight', 'gradBias')
+    self.lookup_matrices[t] = self.lookup_matrix:sharedClone(true, true)
   end
+  collectgarbage()
 end
 
 function layer:getModulesList()
@@ -154,9 +156,6 @@ function layer:updateOutput(input)
 
   assert(pixels:size(1) == self.seq_length)
   local batch_size = pixels:size(2)
-  -- output is a table, indexed by the seq index.
-  self.output = torch.Tensor(self.seq_length, batch_size, self.output_size):type(features:type())
-
   self:_createInitState(batch_size)
 
   self._states = {[0] = self.init_state}
