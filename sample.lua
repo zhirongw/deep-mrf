@@ -72,16 +72,15 @@ local shift = checkpoint.opt['input_shift']
 if shift == nil then shift = 0 end
 local temperature = opt.temperature
 if opt.gpuid >= 0 then for k,v in pairs(protos) do v:cuda() end end
-local pm = protos.pm
-local im = protos.im
-local rgb = protos.rgb
+local model = protos.model
+model:evaluate()
+local pm = model:findModules('nn.PixelModel4N')[1]
+local im = model:findModules('nn.VAEModel')[1]
+local rgb = model:findModules('nn.RGBModel')[1]
 local imcrit = nn.KLDCriterion()
 --local pmcrit = nn.PixelModelCriterion(pm.pixel_size, pm.num_mixtures,
 --            {policy=opt.loss_policy, val=opt.loss_decay})
-pm.core:evaluate()
-rgb.core:evaluate()
-rgb.lookup_matrix:evaluate()
-im:evaluate()
+
 print('The loaded model is trained on patch size with: ', patch_size)
 print('Number of neighbors used: ', pm.num_neighbors)
 print('Number of mixtures used: ', rgb.num_mixtures)
@@ -340,7 +339,7 @@ local images = loader:getBatch{batch_size = batch_size, crop_size = checkpoint.o
 -------------------------------------------------------------------------------
 --
 local noise = torch.randn(batch_size, checkpoint.opt.latent_size):cuda()
-local features, dummy = unpack(im.decoder:forward(noise))
+local features = im.decoder:forward(noise)
 
 local out = sample4n(features, images)
 local out_images = out[{{}, {}, 2, {},{}}]

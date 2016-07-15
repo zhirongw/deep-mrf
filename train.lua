@@ -73,9 +73,6 @@ cmd:option('-optim_beta',0.999,'beta used for adam')
 cmd:option('-optim_epsilon',1e-8,'epsilon that goes into denominator for smoothing')
 
 -- Optimization: for the VAE
-cmd:option('-vae_optim','adam','optimization to use for VAE')
-cmd:option('-vae_optim_alpha',0.90,'alpha for momentum of VAE')
-cmd:option('-vae_optim_beta',0.999,'beta for momentum of VAE')
 cmd:option('-weight_decay', 0, 'L2 weight decay')
 cmd:option('-finetune_vae_after', 0, 'After what iteration do we start finetuning the CNN? (-1 = disable; never finetune, 0 = finetune from start)')
 
