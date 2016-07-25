@@ -1,11 +1,12 @@
-# pixel-rnn
+# Deep Markov Random Field for Image Modeling
 
-Multi-dimensional LSTMs for image generative models.
-
-TODO:
-4. Further optimize Mixture of Gaussian
-5. Inference Code
-
------
-BUGS:
-1. Why there can be negative loss? Probabilities that larger than 1?
+This is the code for the ECCV 2016 paper,
+```
+@inproceedings{deepmrf,
+  title={Deep Markov Random Field for Image Modeling},
+  author={Wu, Zhirong and Lin, Dahua and Tang, Xiaoou},
+  booktitle={European Conference on Computer Vision},
+  year={2016},
+  organization={Springer}
+}
+```
